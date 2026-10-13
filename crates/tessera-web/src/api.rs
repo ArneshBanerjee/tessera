@@ -8,6 +8,8 @@ use serde_json::Value;
 pub const CORE: &str = "/rest/api/3";
 /// The Jira Software API.
 pub const AGILE: &str = "/rest/agile/1.0";
+/// Tessera's own account API: tokens, passwords, profiles, and user administration.
+pub const ACCOUNT: &str = "/rest/tessera/1.0";
 /// The Confluence v1 API.
 pub const WIKI: &str = "/wiki/rest/api";
 /// The Confluence v2 API.
@@ -112,6 +114,10 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> ApiResult<T> {
 
 pub async fn post<T: DeserializeOwned>(path: &str, body: &Value) -> ApiResult<T> {
     decode(request(Method::POST, path, Some(body)).await?)
+}
+
+pub async fn put<T: DeserializeOwned>(path: &str, body: &Value) -> ApiResult<T> {
+    decode(request(Method::PUT, path, Some(body)).await?)
 }
 
 pub async fn delete(path: &str) -> ApiResult<()> {

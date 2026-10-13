@@ -10,7 +10,9 @@ use serde_json::json;
 use crate::api;
 use crate::components::{Avatar, ErrorText};
 use crate::model::User;
-use crate::pages::{board, create, filters, issue, projects, search, wiki, your_work};
+use crate::pages::{
+    admin, board, create, filters, issue, projects, search, settings, wiki, your_work,
+};
 
 /// Shared state for the signed-in user.
 #[derive(Clone, Copy)]
@@ -20,6 +22,8 @@ pub struct Session {
     pub creating: RwSignal<bool>,
     /// Bumped after changes, so open lists reload.
     pub changes: RwSignal<u32>,
+    /// Whether the signed-in user administers the site.
+    pub admin: RwSignal<bool>,
 }
 
 impl Session {
@@ -94,8 +98,14 @@ fn Shell(me: User) -> impl IntoView {
         me: StoredValue::new(me),
         creating: RwSignal::new(false),
         changes: RwSignal::new(0),
+        admin: RwSignal::new(false),
     };
     provide_context(session);
+    spawn_local(async move {
+        if let Ok(me) = api::get::<serde_json::Value>(&format!("{}/me", api::ACCOUNT)).await {
+            session.admin.set(me["admin"].as_bool().unwrap_or(false));
+        }
+    });
     view! {
         <TopNav/>
         <div class="app-body">
@@ -111,6 +121,8 @@ fn Shell(me: User) -> impl IntoView {
                 <Route path=path!("/browse/:key") view=issue::IssuePage/>
                 <Route path=path!("/issues") view=search::SearchPage/>
                 <Route path=path!("/filters") view=filters::FiltersPage/>
+                <Route path=path!("/settings") view=settings::Settings/>
+                <Route path=path!("/admin/users") view=admin::Users/>
                 <Route path=path!("/wiki") view=wiki::Spaces/>
                 <ParentRoute path=path!("/wiki/spaces/:key") view=wiki::SpaceLayout>
                     <Route path=path!("") view=wiki::SpaceHome/>
@@ -179,7 +191,12 @@ fn TopNav() -> impl IntoView {
                     on:input:target=move |ev| query.set(ev.target().value())/>
             </form>
             <div class="nav-user">
-                <Avatar user=Some(session.me.get_value()) size=28/>
+                <Show when=move || session.admin.get()>
+                    <A href="/admin/users" attr:class="nav-link">"Admin"</A>
+                </Show>
+                <A href="/settings" attr:class="nav-avatar" attr:title="Your profile and API tokens">
+                    <Avatar user=Some(session.me.get_value()) size=28/>
+                </A>
                 <button class="button subtle" on:click=logout>"Log out"</button>
             </div>
         </nav>

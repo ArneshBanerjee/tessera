@@ -3,6 +3,7 @@
 //! Every route is served under both `/rest/api/2` and `/rest/api/3`. The versions differ only in
 //! rich text: v2 uses plain strings, v3 uses ADF documents. Handlers read [`ApiVersion`] to pick.
 
+mod account;
 pub mod agile;
 pub mod attachments;
 mod comments;
@@ -80,6 +81,7 @@ pub fn router() -> Router<AppState> {
                 .delete(session::logout),
         )
         .nest("/rest/agile/1.0", agile::router())
+        .nest("/rest/tessera/1.0", account::router())
         .nest(
             "/rest/api/2",
             jira_routes().layer(Extension(ApiVersion::V2)),

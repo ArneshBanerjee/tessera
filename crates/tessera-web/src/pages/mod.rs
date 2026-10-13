@@ -1,11 +1,13 @@
 //! Pages of the app, and helpers they share.
 
+pub mod admin;
 pub mod board;
 pub mod create;
 pub mod filters;
 pub mod issue;
 pub mod projects;
 pub mod search;
+pub mod settings;
 pub mod wiki;
 pub mod your_work;
 

@@ -120,3 +120,45 @@ pub fn escape_like(text: &str) -> String {
         .replace('%', "\\%")
         .replace('_', "\\_")
 }
+
+pub async fn update_profile(
+    db: &SqlitePool,
+    id: i64,
+    display_name: &str,
+    time_zone: &str,
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE users SET display_name = ?, time_zone = ? WHERE id = ?")
+        .bind(display_name)
+        .bind(time_zone)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_password_hash(db: &SqlitePool, id: i64, hash: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(hash)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Sets whether a user can sign in, and whether they administer the site.
+pub async fn set_flags(db: &SqlitePool, id: i64, active: bool, is_admin: bool) -> sqlx::Result<()> {
+    sqlx::query("UPDATE users SET active = ?, is_admin = ? WHERE id = ?")
+        .bind(active)
+        .bind(is_admin)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// How many active administrators the site has, so the last one is never removed.
+pub async fn active_admin_count(db: &SqlitePool) -> sqlx::Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE active = 1 AND is_admin = 1")
+        .fetch_one(db)
+        .await
+}

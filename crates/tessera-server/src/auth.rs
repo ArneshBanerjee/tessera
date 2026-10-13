@@ -57,6 +57,45 @@ pub async fn create_api_token(db: &SqlitePool, user_id: i64, label: &str) -> sql
     Ok(secret)
 }
 
+/// An API token as its owner sees it: never the secret, which is shown once at creation.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ApiToken {
+    pub id: i64,
+    pub label: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+pub async fn api_tokens(db: &SqlitePool, user_id: i64) -> sqlx::Result<Vec<ApiToken>> {
+    sqlx::query_as(
+        "SELECT id, label, created_at, last_used_at FROM api_tokens WHERE user_id = ? ORDER BY id",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Revokes one of a user's tokens. Returns whether it existed.
+pub async fn revoke_api_token(db: &SqlitePool, user_id: i64, id: i64) -> sqlx::Result<bool> {
+    let result = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")
+        .bind(id)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Ends every browser session of a user except `keep`, for example after a password change.
+pub async fn end_sessions(db: &SqlitePool, user_id: i64, keep: Option<&str>) -> sqlx::Result<()> {
+    let kept = keep.map(sha256_hex).unwrap_or_default();
+    sqlx::query("DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?")
+        .bind(user_id)
+        .bind(kept)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 /// Creates a browser session and returns the cookie value.
 pub async fn create_session(db: &SqlitePool, user_id: i64) -> sqlx::Result<String> {
     let secret = random_secret();

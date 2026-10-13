@@ -324,3 +324,11 @@ textarea.input { resize: vertical; }
 .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-body img { max-width: 100%; height: auto; }
 .wiki-body p.media { text-align: center; }
+
+/* Settings */
+.settings-page { max-width: 860px; }
+.settings-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; }
+.settings-card h2 { margin-bottom: 8px; }
+.token-bar { flex-direction: column; align-items: flex-start; }
+.token { user-select: all; word-break: break-all; }
+.nav-avatar { display: inline-flex; }
