@@ -52,13 +52,10 @@ pub struct NewContent<'a> {
     pub now: i64,
 }
 
-/// A plain-text copy of a storage-format body, for search.
+/// A plain-text copy of a storage-format body, for search. Code in macros counts as text.
 pub fn plain_text(body: &str) -> String {
-    // Spaces before tags keep words in separate blocks apart once the tags are gone.
-    let spaced = body.replace('<', " <");
-    let stripped = ammonia::Builder::empty().clean(&spaced).to_string();
-    let decoded = html_escape::decode_html_entities(&stripped);
-    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+    let text = tessera_adf::to_plain_text(&tessera_adf::html::from_storage(body));
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub async fn create(db: &SqlitePool, new: &NewContent<'_>) -> sqlx::Result<Content> {

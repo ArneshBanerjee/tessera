@@ -1,14 +1,16 @@
 //! Rules shared by the v1 and v2 APIs: finding, creating, editing, and removing content, and
 //! converting bodies between formats.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
+use sqlx::SqlitePool;
 
 use super::error::{WikiError, WikiResult};
-use super::render::view_html;
 use crate::AppState;
 use crate::store::content::{self, Content, Edit, NewContent};
 use crate::store::spaces::{self, NewSpace, Space};
-use crate::store::users::User;
+use crate::store::users::{self, User};
 use crate::time::now_ms;
 
 /// An id given as a JSON string or number.
@@ -57,13 +59,53 @@ pub fn body_from(representation: &str, value: &Value) -> WikiResult<String> {
     }
 }
 
+/// Display names by account id, for drawing mentions.
+pub type Names = HashMap<String, String>;
+
+pub async fn load_names(db: &SqlitePool) -> sqlx::Result<Names> {
+    Ok(users::all(db)
+        .await?
+        .into_iter()
+        .map(|u| (u.account_id, u.display_name))
+        .collect())
+}
+
+/// Whether a representation is drawn for display, and so needs mention names.
+pub fn is_view(representation: &str) -> bool {
+    matches!(
+        representation,
+        "view" | "export_view" | "styled_view" | "anonymous_export_view"
+    )
+}
+
+/// Removes anything unsafe from HTML: scripts, event handlers, and other active content.
+pub fn sanitize(html: &str) -> String {
+    ammonia::Builder::default()
+        .add_tags(["details", "summary", "input", "time"])
+        .add_generic_attributes(["class"])
+        .add_tag_attributes("input", ["type", "checked"])
+        .add_tag_attributes("time", ["datetime"])
+        .add_tag_attributes("ol", ["start"])
+        // Task boxes are for show; they never accept input.
+        .set_tag_attribute_value("input", "disabled", "disabled")
+        .clean(html)
+        .to_string()
+}
+
+/// Draws a storage-format body as safe HTML: macros become plain HTML, then it is sanitized.
+pub fn view_html(storage: &str, names: &Names) -> String {
+    let doc = tessera_adf::html::from_storage(storage);
+    let html = tessera_adf::html::to_view(&doc, &|id| names.get(id).cloned());
+    sanitize(&html)
+}
+
 /// A storage-format body in `representation`, or `None` if Tessera cannot produce it.
-pub fn body_as(representation: &str, storage: &str) -> Option<String> {
+pub fn body_as(representation: &str, storage: &str, names: &Names) -> Option<String> {
     Some(match representation {
         "storage" | "editor" => storage.to_string(),
         "atlas_doc_format" => serde_json::to_string(&tessera_adf::html::from_storage(storage))
             .expect("ADF serializes"),
-        "view" | "export_view" | "styled_view" | "anonymous_export_view" => view_html(storage),
+        r if is_view(r) => view_html(storage, names),
         _ => return None,
     })
 }

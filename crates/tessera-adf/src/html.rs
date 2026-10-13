@@ -12,14 +12,26 @@ use serde_json::{Map, Value, json};
 
 use crate::{Mark, Node};
 
-// ADF to storage.
+// ADF to storage, and to HTML for display.
 
 /// Writes an ADF document as storage-format XHTML.
 pub fn to_storage(doc: &Node) -> String {
+    let writer = Writer {
+        view: false,
+        names: &|_| None,
+    };
     let mut out = String::new();
-    for node in &doc.content {
-        block(node, &mut out);
-    }
+    writer.blocks(&doc.content, &mut out);
+    out
+}
+
+/// Writes an ADF document as plain HTML for display, with macros drawn as HTML: code blocks
+/// as `pre`, panels as `div.panel`, expands as `details`, and so on. `names` gives the display
+/// name for a mention's account id. The output is not sanitized; callers must sanitize it.
+pub fn to_view(doc: &Node, names: &dyn Fn(&str) -> Option<String>) -> String {
+    let writer = Writer { view: true, names };
+    let mut out = String::new();
+    writer.blocks(&doc.content, &mut out);
     out
 }
 
@@ -38,12 +50,6 @@ fn attr_str<'a>(node: &'a Node, name: &str) -> &'a str {
     attr(node, name).and_then(Value::as_str).unwrap_or_default()
 }
 
-fn blocks(nodes: &[Node], out: &mut String) {
-    for node in nodes {
-        block(node, out);
-    }
-}
-
 fn macro_start(name: &str, out: &mut String) {
     out.push_str(&format!(
         "<ac:structured-macro ac:name=\"{name}\" ac:schema-version=\"1\">"
@@ -57,132 +63,6 @@ fn parameter(name: &str, value: &str, out: &mut String) {
     ));
 }
 
-fn block(node: &Node, out: &mut String) {
-    match node.kind.as_str() {
-        "paragraph" => {
-            out.push_str("<p>");
-            inlines(&node.content, out);
-            out.push_str("</p>");
-        }
-        "heading" => {
-            let level = attr(node, "level")
-                .and_then(Value::as_u64)
-                .unwrap_or(1)
-                .clamp(1, 6);
-            out.push_str(&format!("<h{level}>"));
-            inlines(&node.content, out);
-            out.push_str(&format!("</h{level}>"));
-        }
-        "bulletList" => {
-            out.push_str("<ul>");
-            blocks(&node.content, out);
-            out.push_str("</ul>");
-        }
-        "orderedList" => {
-            match attr(node, "order").and_then(Value::as_u64) {
-                Some(start) if start != 1 => out.push_str(&format!("<ol start=\"{start}\">")),
-                _ => out.push_str("<ol>"),
-            }
-            blocks(&node.content, out);
-            out.push_str("</ol>");
-        }
-        "listItem" => {
-            out.push_str("<li>");
-            blocks(&node.content, out);
-            out.push_str("</li>");
-        }
-        "blockquote" => {
-            out.push_str("<blockquote>");
-            blocks(&node.content, out);
-            out.push_str("</blockquote>");
-        }
-        "codeBlock" => {
-            let code: String = node
-                .content
-                .iter()
-                .filter_map(|n| n.text.as_deref())
-                .collect();
-            macro_start("code", out);
-            let language = attr_str(node, "language");
-            if !language.is_empty() {
-                parameter("language", language, out);
-            }
-            // CDATA cannot contain its own end marker, so split it where it appears.
-            let safe = code.replace("]]>", "]]]]><![CDATA[>");
-            out.push_str(&format!(
-                "<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body></ac:structured-macro>"
-            ));
-        }
-        "rule" => out.push_str("<hr />"),
-        "panel" => {
-            let name = match attr_str(node, "panelType") {
-                "note" => "note",
-                "warning" | "error" => "warning",
-                "success" => "tip",
-                _ => "info",
-            };
-            macro_start(name, out);
-            out.push_str("<ac:rich-text-body>");
-            blocks(&node.content, out);
-            out.push_str("</ac:rich-text-body></ac:structured-macro>");
-        }
-        "expand" | "nestedExpand" => {
-            macro_start("expand", out);
-            let title = attr_str(node, "title");
-            if !title.is_empty() {
-                parameter("title", title, out);
-            }
-            out.push_str("<ac:rich-text-body>");
-            blocks(&node.content, out);
-            out.push_str("</ac:rich-text-body></ac:structured-macro>");
-        }
-        "table" => {
-            out.push_str("<table><tbody>");
-            blocks(&node.content, out);
-            out.push_str("</tbody></table>");
-        }
-        "tableRow" => {
-            out.push_str("<tr>");
-            blocks(&node.content, out);
-            out.push_str("</tr>");
-        }
-        "tableHeader" | "tableCell" => {
-            let tag = if node.kind == "tableHeader" {
-                "th"
-            } else {
-                "td"
-            };
-            out.push_str(&format!("<{tag}>"));
-            blocks(&node.content, out);
-            out.push_str(&format!("</{tag}>"));
-        }
-        "taskList" => {
-            out.push_str("<ac:task-list>");
-            blocks(&node.content, out);
-            out.push_str("</ac:task-list>");
-        }
-        "taskItem" => {
-            let status = if attr_str(node, "state") == "DONE" {
-                "complete"
-            } else {
-                "incomplete"
-            };
-            out.push_str(&format!(
-                "<ac:task><ac:task-status>{status}</ac:task-status><ac:task-body>"
-            ));
-            inlines(&node.content, out);
-            out.push_str("</ac:task-body></ac:task>");
-        }
-        // Inline content at block level, or an unknown block: keep what it holds.
-        _ if is_inline(&node.kind) => {
-            out.push_str("<p>");
-            inlines(std::slice::from_ref(node), out);
-            out.push_str("</p>");
-        }
-        _ => blocks(&node.content, out),
-    }
-}
-
 fn is_inline(kind: &str) -> bool {
     matches!(
         kind,
@@ -190,81 +70,266 @@ fn is_inline(kind: &str) -> bool {
     )
 }
 
-/// Writes inline nodes. Neighbours that share their outer mark share one tag, so
-/// `<em>a <code>b</code></em>` stays one `em` element.
-fn inlines(nodes: &[Node], out: &mut String) {
-    let items: Vec<(&[Mark], &Node)> = nodes.iter().map(|n| (n.marks.as_slice(), n)).collect();
-    marked_run(&items, out);
+/// Writes ADF as storage (`view: false`) or as display HTML (`view: true`). The two differ
+/// only in how macros are written.
+struct Writer<'a> {
+    view: bool,
+    names: &'a dyn Fn(&str) -> Option<String>,
 }
 
-fn marked_run(items: &[(&[Mark], &Node)], out: &mut String) {
-    let mut i = 0;
-    while i < items.len() {
-        let (marks, node) = items[i];
-        let Some(outer) = marks.first() else {
-            inline(node, out);
-            i += 1;
-            continue;
-        };
-        // The run of neighbours with the same outer mark.
-        let end = items[i..]
-            .iter()
-            .position(|(m, _)| m.first() != Some(outer))
-            .map_or(items.len(), |p| i + p);
-        let inner: Vec<(&[Mark], &Node)> =
-            items[i..end].iter().map(|(m, n)| (&m[1..], *n)).collect();
-        let mut text = String::new();
-        marked_run(&inner, &mut text);
-        out.push_str(&wrap_mark(outer, text));
-        i = end;
+impl Writer<'_> {
+    fn blocks(&self, nodes: &[Node], out: &mut String) {
+        for node in nodes {
+            self.block(node, out);
+        }
     }
-}
 
-fn inline(node: &Node, out: &mut String) {
-    match node.kind.as_str() {
-        // Marks are applied by `marked_run`.
-        "text" => out.push_str(&escape(node.text.as_deref().unwrap_or_default())),
-        "hardBreak" => out.push_str("<br />"),
-        "mention" => {
-            let id = attr_str(node, "id");
-            out.push_str(&format!(
-                "<ac:link><ri:user ri:account-id=\"{}\" /></ac:link>",
-                escape(id)
-            ));
+    /// Wraps the node's blocks in a tag.
+    fn wrapped(&self, open: &str, close: &str, node: &Node, out: &mut String) {
+        out.push_str(open);
+        self.blocks(&node.content, out);
+        out.push_str(close);
+    }
+
+    fn block(&self, node: &Node, out: &mut String) {
+        match node.kind.as_str() {
+            "paragraph" => {
+                out.push_str("<p>");
+                self.inlines(&node.content, out);
+                out.push_str("</p>");
+            }
+            "heading" => {
+                let level = attr(node, "level")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1)
+                    .clamp(1, 6);
+                out.push_str(&format!("<h{level}>"));
+                self.inlines(&node.content, out);
+                out.push_str(&format!("</h{level}>"));
+            }
+            "bulletList" => self.wrapped("<ul>", "</ul>", node, out),
+            "orderedList" => {
+                let open = match attr(node, "order").and_then(Value::as_u64) {
+                    Some(start) if start != 1 => format!("<ol start=\"{start}\">"),
+                    _ => "<ol>".to_string(),
+                };
+                self.wrapped(&open, "</ol>", node, out);
+            }
+            "listItem" => self.wrapped("<li>", "</li>", node, out),
+            "blockquote" => self.wrapped("<blockquote>", "</blockquote>", node, out),
+            "codeBlock" => self.code_block(node, out),
+            "rule" => out.push_str("<hr />"),
+            "panel" => {
+                let kind = attr_str(node, "panelType");
+                if self.view {
+                    let kind = if kind.is_empty() { "info" } else { kind };
+                    let open = format!("<div class=\"panel panel-{}\">", escape(kind));
+                    self.wrapped(&open, "</div>", node, out);
+                } else {
+                    let name = match kind {
+                        "note" => "note",
+                        "warning" | "error" => "warning",
+                        "success" => "tip",
+                        _ => "info",
+                    };
+                    macro_start(name, out);
+                    self.wrapped(
+                        "<ac:rich-text-body>",
+                        "</ac:rich-text-body></ac:structured-macro>",
+                        node,
+                        out,
+                    );
+                }
+            }
+            "expand" | "nestedExpand" => {
+                let title = attr_str(node, "title");
+                if self.view {
+                    let label = if title.is_empty() {
+                        "Click here to expand…"
+                    } else {
+                        title
+                    };
+                    let open = format!(
+                        "<details class=\"expand\"><summary>{}</summary>",
+                        escape(label)
+                    );
+                    self.wrapped(&open, "</details>", node, out);
+                } else {
+                    macro_start("expand", out);
+                    if !title.is_empty() {
+                        parameter("title", title, out);
+                    }
+                    self.wrapped(
+                        "<ac:rich-text-body>",
+                        "</ac:rich-text-body></ac:structured-macro>",
+                        node,
+                        out,
+                    );
+                }
+            }
+            "table" => self.wrapped("<table><tbody>", "</tbody></table>", node, out),
+            "tableRow" => self.wrapped("<tr>", "</tr>", node, out),
+            "tableHeader" => self.wrapped("<th>", "</th>", node, out),
+            "tableCell" => self.wrapped("<td>", "</td>", node, out),
+            "taskList" if self.view => self.wrapped("<ul class=\"task-list\">", "</ul>", node, out),
+            "taskList" => self.wrapped("<ac:task-list>", "</ac:task-list>", node, out),
+            "taskItem" => {
+                let done = attr_str(node, "state") == "DONE";
+                if self.view {
+                    let checked = if done { " checked=\"checked\"" } else { "" };
+                    out.push_str(&format!(
+                        "<li class=\"task\"><input type=\"checkbox\" disabled=\"disabled\"{checked} /> "
+                    ));
+                    self.inlines(&node.content, out);
+                    out.push_str("</li>");
+                } else {
+                    let status = if done { "complete" } else { "incomplete" };
+                    out.push_str(&format!(
+                        "<ac:task><ac:task-status>{status}</ac:task-status><ac:task-body>"
+                    ));
+                    self.inlines(&node.content, out);
+                    out.push_str("</ac:task-body></ac:task>");
+                }
+            }
+            // Inline content at block level, or an unknown block: keep what it holds.
+            _ if is_inline(&node.kind) => {
+                out.push_str("<p>");
+                self.inlines(std::slice::from_ref(node), out);
+                out.push_str("</p>");
+            }
+            _ => self.blocks(&node.content, out),
         }
-        "emoji" => {
-            let short = attr_str(node, "shortName");
-            let fallback = attr_str(node, "text");
-            out.push_str(&format!(
-                "<ac:emoticon ac:name=\"blue-star\" ac:emoji-shortname=\"{}\" ac:emoji-fallback=\"{}\" />",
-                escape(short),
-                escape(fallback)
-            ));
-        }
-        "status" => {
-            macro_start("status", out);
-            parameter("title", attr_str(node, "text"), out);
-            let colour = match attr_str(node, "color") {
-                "green" => "Green",
-                "red" => "Red",
-                "yellow" => "Yellow",
-                "blue" => "Blue",
-                "purple" => "Purple",
-                _ => "Grey",
+    }
+
+    fn code_block(&self, node: &Node, out: &mut String) {
+        let code: String = node
+            .content
+            .iter()
+            .filter_map(|n| n.text.as_deref())
+            .collect();
+        let language = attr_str(node, "language");
+        if self.view {
+            let class = if language.is_empty() {
+                String::new()
+            } else {
+                format!(" class=\"language-{}\"", escape(language))
             };
-            parameter("colour", colour, out);
-            out.push_str("</ac:structured-macro>");
+            out.push_str(&format!("<pre><code{class}>{}</code></pre>", escape(&code)));
+            return;
         }
-        "inlineCard" => {
-            let url = escape(attr_str(node, "url"));
-            out.push_str(&format!("<a href=\"{url}\">{url}</a>"));
+        macro_start("code", out);
+        if !language.is_empty() {
+            parameter("language", language, out);
         }
-        "date" => {
-            // ADF dates are milliseconds since the epoch, as a string.
-            let ms = attr_str(node, "timestamp");
-            out.push_str(&format!("<time datetime=\"{}\" />", escape(ms)));
+        // CDATA cannot contain its own end marker, so split it where it appears.
+        let safe = code.replace("]]>", "]]]]><![CDATA[>");
+        out.push_str(&format!(
+            "<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body></ac:structured-macro>"
+        ));
+    }
+
+    /// Writes inline nodes. Neighbours that share their outer mark share one tag, so
+    /// `<em>a <code>b</code></em>` stays one `em` element.
+    fn inlines(&self, nodes: &[Node], out: &mut String) {
+        let items: Vec<(&[Mark], &Node)> = nodes.iter().map(|n| (n.marks.as_slice(), n)).collect();
+        self.marked_run(&items, out);
+    }
+
+    fn marked_run(&self, items: &[(&[Mark], &Node)], out: &mut String) {
+        let mut i = 0;
+        while i < items.len() {
+            let (marks, node) = items[i];
+            let Some(outer) = marks.first() else {
+                self.inline(node, out);
+                i += 1;
+                continue;
+            };
+            // The run of neighbours with the same outer mark.
+            let end = items[i..]
+                .iter()
+                .position(|(m, _)| m.first() != Some(outer))
+                .map_or(items.len(), |p| i + p);
+            let inner: Vec<(&[Mark], &Node)> =
+                items[i..end].iter().map(|(m, n)| (&m[1..], *n)).collect();
+            let mut text = String::new();
+            self.marked_run(&inner, &mut text);
+            out.push_str(&wrap_mark(outer, text));
+            i = end;
         }
-        _ => inlines(&node.content, out),
+    }
+
+    fn inline(&self, node: &Node, out: &mut String) {
+        match node.kind.as_str() {
+            // Marks are applied by `marked_run`.
+            "text" => out.push_str(&escape(node.text.as_deref().unwrap_or_default())),
+            "hardBreak" => out.push_str("<br />"),
+            "mention" => {
+                let id = attr_str(node, "id");
+                if self.view {
+                    let name = (self.names)(id).unwrap_or_else(|| {
+                        attr_str(node, "text").trim_start_matches('@').to_string()
+                    });
+                    out.push_str(&format!(
+                        "<span class=\"mention\">@{}</span>",
+                        escape(&name)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "<ac:link><ri:user ri:account-id=\"{}\" /></ac:link>",
+                        escape(id)
+                    ));
+                }
+            }
+            "emoji" => {
+                let short = attr_str(node, "shortName");
+                let fallback = attr_str(node, "text");
+                if self.view {
+                    let shown = if fallback.is_empty() { short } else { fallback };
+                    out.push_str(&escape(shown));
+                } else {
+                    out.push_str(&format!(
+                        "<ac:emoticon ac:name=\"blue-star\" ac:emoji-shortname=\"{}\" ac:emoji-fallback=\"{}\" />",
+                        escape(short),
+                        escape(fallback)
+                    ));
+                }
+            }
+            "status" => {
+                let text = attr_str(node, "text");
+                let color = attr_str(node, "color");
+                if self.view {
+                    let color = if color.is_empty() { "neutral" } else { color };
+                    out.push_str(&format!(
+                        "<span class=\"status status-{}\">{}</span>",
+                        escape(color),
+                        escape(text)
+                    ));
+                } else {
+                    macro_start("status", out);
+                    parameter("title", text, out);
+                    let colour = match color {
+                        "green" => "Green",
+                        "red" => "Red",
+                        "yellow" => "Yellow",
+                        "blue" => "Blue",
+                        "purple" => "Purple",
+                        _ => "Grey",
+                    };
+                    parameter("colour", colour, out);
+                    out.push_str("</ac:structured-macro>");
+                }
+            }
+            "inlineCard" => {
+                let url = escape(attr_str(node, "url"));
+                out.push_str(&format!("<a href=\"{url}\">{url}</a>"));
+            }
+            "date" => {
+                // ADF dates are milliseconds since the epoch, as a string.
+                let ms = attr_str(node, "timestamp");
+                out.push_str(&format!("<time datetime=\"{}\" />", escape(ms)));
+            }
+            _ => self.inlines(&node.content, out),
+        }
     }
 }
 
@@ -301,7 +366,7 @@ fn wrap_mark(mark: &Mark, inner: String) -> String {
 
 /// Reads a storage-format body into an ADF document.
 pub fn from_storage(storage: &str) -> Node {
-    let fragment = Html::parse_fragment(storage);
+    let fragment = Html::parse_fragment(&cdata_to_text(storage));
     let mut content = Vec::new();
     // `parse_fragment` wraps the input in an `<html>` element.
     let root = fragment.root_element();
@@ -366,22 +431,26 @@ fn block_children(element: ElementRef, out: &mut Vec<Node>) {
                 }
             }
             HtmlNode::Text(text) => push_text(&text.text, &[], &mut pending),
-            HtmlNode::Comment(comment) => {
-                // html5ever reads CDATA in HTML as a comment.
-                if let Some(cdata) = cdata(&comment.comment) {
-                    push_text(&cdata, &[], &mut pending);
-                }
-            }
             _ => {}
         }
     }
     flush(&mut pending, out);
 }
 
-fn cdata(comment: &str) -> Option<String> {
-    comment
-        .strip_prefix("[CDATA[")
-        .map(|rest| rest.strip_suffix("]]").unwrap_or(rest).to_string())
+/// Replaces `<![CDATA[...]]>` sections with escaped text. An HTML parser reads CDATA as a
+/// comment that ends at the first `>`, which would cut code such as `a > b` short.
+fn cdata_to_text(storage: &str) -> String {
+    let mut out = String::with_capacity(storage.len());
+    let mut rest = storage;
+    while let Some(start) = rest.find("<![CDATA[") {
+        out.push_str(&rest[..start]);
+        let body = &rest[start + 9..];
+        let end = body.find("]]>").unwrap_or(body.len());
+        out.push_str(&escape(&body[..end]));
+        rest = body.get(end + 3..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The block nodes for a block-level element, or `None` when the element is inline.
@@ -434,6 +503,8 @@ fn block_element(element: ElementRef) -> Option<Vec<Node>> {
         "blockquote" => vec![node("blockquote", non_empty(blocks_of(element)))],
         "pre" => vec![code_block(element.text().collect(), None)],
         "hr" => vec![Node::new("rule")],
+        // Active and hidden content has no place in a document.
+        "script" | "style" | "template" | "noscript" | "iframe" | "object" => Vec::new(),
         "table" => vec![table(element)],
         "div" | "section" | "article" | "body" | "tbody" | "thead" | "ac:rich-text-body"
         | "ac:layout" | "ac:layout-section" | "ac:layout-cell" => blocks_of(element),
@@ -504,16 +575,8 @@ fn macro_block(element: ElementRef) -> Option<Vec<Node>> {
     Some(match name {
         "code" | "noformat" => {
             let code = child(element, "ac:plain-text-body")
-                .map(|b| {
-                    // The body is CDATA, which html5ever keeps as comments.
-                    b.children()
-                        .map(|n| match n.value() {
-                            HtmlNode::Comment(c) => cdata(&c.comment).unwrap_or_default(),
-                            HtmlNode::Text(t) => t.text.to_string(),
-                            _ => String::new(),
-                        })
-                        .collect::<String>()
-                })
+                // CDATA became text before parsing.
+                .map(|b| b.text().collect::<String>())
                 .unwrap_or_default();
             vec![code_block(code, macro_parameter(element, "language"))]
         }
@@ -798,6 +861,16 @@ mod tests {
     fn reads_loose_storage() {
         let adf = from_storage("Just text\n<p>  spaced   out  </p>");
         assert_eq!(to_storage(&adf), "<p>Just text</p><p>spaced out</p>");
+    }
+
+    #[test]
+    fn view_draws_macros_as_html() {
+        let storage = "<ac:structured-macro ac:name=\"code\" ac:schema-version=\"1\"><ac:parameter ac:name=\"language\">sh</ac:parameter><ac:plain-text-body><![CDATA[echo <hi>]]></ac:plain-text-body></ac:structured-macro><p><ac:link><ri:user ri:account-id=\"u1\" /></ac:link> see</p>";
+        let names = |id: &str| (id == "u1").then(|| "Jane".to_string());
+        assert_eq!(
+            to_view(&from_storage(storage), &names),
+            "<pre><code class=\"language-sh\">echo &lt;hi&gt;</code></pre><p><span class=\"mention\">@Jane</span> see</p>"
+        );
     }
 
     #[test]

@@ -360,3 +360,30 @@ async fn view_body_is_sanitized() {
         .await;
     assert_eq!(created["body"]["view"]["value"], "<p>Hi</p>");
 }
+
+#[tokio::test]
+async fn view_draws_macros_and_mentions() {
+    let app = TestApp::new().await;
+    space(&app, "DOCS").await;
+    let (_, me) = app.get(&format!("{API}/user/current")).await;
+    let account = me["accountId"].as_str().unwrap();
+    let name = me["displayName"].as_str().unwrap();
+    let storage = format!(
+        "<ac:structured-macro ac:name=\"code\"><ac:plain-text-body><![CDATA[if a > b {{}}]]></ac:plain-text-body></ac:structured-macro><p>Ask <ac:link><ri:user ri:account-id=\"{account}\" /></ac:link></p>"
+    );
+    let (_, created) = app
+        .post(
+            &format!("{API}/content?expand=body.view"),
+            json!({ "type": "page", "title": "Macros", "space": { "key": "DOCS" }, "body": { "storage": { "value": storage, "representation": "storage" } } }),
+        )
+        .await;
+    assert_eq!(
+        created["body"]["view"]["value"],
+        format!(
+            "<pre><code>if a &gt; b {{}}</code></pre><p>Ask <span class=\"mention\">@{name}</span></p>"
+        )
+    );
+    // Code inside macros is searchable.
+    let (_, found) = search(&app, "text ~ \"if a\"").await;
+    assert_eq!(titles(&found), ["Macros"]);
+}

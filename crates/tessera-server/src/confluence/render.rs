@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value, json};
 
 use super::error::WikiResult;
+use super::service::{self, Names};
 use crate::AppState;
 use crate::store::content::{self, Content, Version};
 use crate::store::labels::{self, Label};
@@ -63,19 +64,13 @@ pub const REPRESENTATIONS: &[&str] = &[
     "anonymous_export_view",
 ];
 
-/// Renders a storage-format body as safe HTML for display.
-pub fn view_html(storage: &str) -> String {
-    ammonia::Builder::default()
-        .add_generic_attributes(["class"])
-        .clean(storage)
-        .to_string()
-}
-
 /// Shared state for rendering one response: URLs and a cache of loaded users.
 pub struct WikiCtx<'a> {
     pub state: &'a AppState,
     users: HashMap<i64, Option<User>>,
     spaces: HashMap<i64, Option<Space>>,
+    /// Loaded the first time a body is drawn for display.
+    names: Option<Names>,
 }
 
 impl<'a> WikiCtx<'a> {
@@ -84,7 +79,15 @@ impl<'a> WikiCtx<'a> {
             state,
             users: HashMap::new(),
             spaces: HashMap::new(),
+            names: None,
         }
+    }
+
+    async fn names(&mut self) -> WikiResult<&Names> {
+        if self.names.is_none() {
+            self.names = Some(service::load_names(&self.state.db).await?);
+        }
+        Ok(self.names.as_ref().expect("names were just loaded"))
     }
 
     /// The base of Confluence URLs, such as `https://example.com/wiki`.
@@ -391,7 +394,7 @@ impl<'a> WikiCtx<'a> {
             expandable_link("container", format!("/rest/api/space/{space_key}"));
         }
         if expand.has("body") {
-            out["body"] = self.body(content, &expand.below("body"));
+            out["body"] = self.body(content, &expand.below("body")).await?;
         } else {
             expandable_link("body", String::new());
         }
@@ -432,15 +435,17 @@ impl<'a> WikiCtx<'a> {
         Ok(out)
     }
 
-    fn body(&self, content: &Content, expand: &Expand) -> Value {
+    async fn body(&mut self, content: &Content, expand: &Expand) -> WikiResult<Value> {
         let mut out = Map::new();
         let mut expandable = Map::new();
         for representation in REPRESENTATIONS {
             // Convert only the formats the client asked for.
-            let value = expand
-                .has(representation)
-                .then(|| super::service::body_as(representation, &content.body))
-                .flatten();
+            let value = if expand.has(representation) {
+                let names = self.names().await?;
+                service::body_as(representation, &content.body, names)
+            } else {
+                None
+            };
             match value {
                 Some(value) => {
                     out.insert(
@@ -460,7 +465,7 @@ impl<'a> WikiCtx<'a> {
         }
         expandable.insert("dynamic".into(), json!(""));
         out.insert("_expandable".into(), Value::Object(expandable));
-        Value::Object(out)
+        Ok(Value::Object(out))
     }
 
     /// Children of each requested type: `page`, `comment`, and `attachment`.

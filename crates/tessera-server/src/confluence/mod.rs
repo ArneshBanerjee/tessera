@@ -195,6 +195,7 @@ async fn long_task(
 
 /// Converts a body between representations. Storage is the only source format.
 async fn convert_body(
+    State(state): State<AppState>,
     CurrentUser(_): CurrentUser,
     axum::extract::Path(to): axum::extract::Path<String>,
     Json(body): Json<Value>,
@@ -209,7 +210,7 @@ async fn convert_body(
     let converted = match to.as_str() {
         "storage" | "editor" => value.to_string(),
         "view" | "export_view" | "styled_view" | "anonymous_export_view" => {
-            render::view_html(value)
+            service::view_html(value, &service::load_names(&state.db).await?)
         }
         _ => {
             return Err(WikiError::bad_request(format!(

@@ -150,6 +150,8 @@ struct V2Ctx<'a> {
     state: &'a AppState,
     accounts: HashMap<i64, String>,
     space_keys: HashMap<i64, String>,
+    /// Loaded the first time a body is drawn for display.
+    names: Option<service::Names>,
 }
 
 impl<'a> V2Ctx<'a> {
@@ -158,6 +160,7 @@ impl<'a> V2Ctx<'a> {
             state,
             accounts: HashMap::new(),
             space_keys: HashMap::new(),
+            names: None,
         }
     }
 
@@ -201,7 +204,7 @@ impl<'a> V2Ctx<'a> {
         });
         if let Some(format) = description_format {
             let value = match format {
-                "view" => super::render::view_html(&html_escape::encode_text(&space.description)),
+                "view" => html_escape::encode_text(&space.description).to_string(),
                 _ => space.description.clone(),
             };
             out["description"] = json!({ format: { "representation": format, "value": value } });
@@ -229,11 +232,16 @@ impl<'a> V2Ctx<'a> {
         )
     }
 
-    fn body(&self, item: &Content, format: Option<&str>) -> V2Result<Value> {
+    async fn body(&mut self, item: &Content, format: Option<&str>) -> V2Result<Value> {
         let Some(format) = format else {
             return Ok(json!({}));
         };
-        let value = service::body_as(format, &item.body)
+        if service::is_view(format) && self.names.is_none() {
+            self.names = Some(service::load_names(&self.state.db).await?);
+        }
+        let empty = service::Names::new();
+        let names = self.names.as_ref().unwrap_or(&empty);
+        let value = service::body_as(format, &item.body, names)
             .ok_or_else(|| WikiError::bad_request(format!("Unsupported body-format: {format}")))?;
         Ok(json!({ format: { "representation": format, "value": value } }))
     }
@@ -258,7 +266,7 @@ impl<'a> V2Ctx<'a> {
             "lastOwnerId": null,
             "createdAt": format_iso(item.created_at),
             "version": self.current_version(item).await?,
-            "body": self.body(item, body_format)?,
+            "body": self.body(item, body_format).await?,
             "_links": {
                 "webui": webui,
                 "editui": format!("/pages/resumedraft.action?draftId={}", item.id),
@@ -283,7 +291,7 @@ impl<'a> V2Ctx<'a> {
             "status": item.status,
             "title": item.title,
             "version": self.current_version(item).await?,
-            "body": self.body(item, body_format)?,
+            "body": self.body(item, body_format).await?,
             "_links": { "webui": format!("/pages/{}?focusedCommentId={}", item.container_id.unwrap_or_default(), item.id) },
         });
         match &container {
