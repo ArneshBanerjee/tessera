@@ -145,7 +145,11 @@ pub async fn delete(
     Path(key): Path<String>,
 ) -> WikiResult<(StatusCode, Json<Value>)> {
     let space = find_space(&state, &key).await?;
+    let files = content::attachment_ids_in_space(&state.db, space.id).await?;
     spaces::delete(&state.db, space.id).await?;
+    for id in files {
+        crate::store::wiki_files::remove_all(&state.data_dir, id).await;
+    }
     let task = uuid::Uuid::new_v4().to_string();
     Ok((
         StatusCode::ACCEPTED,

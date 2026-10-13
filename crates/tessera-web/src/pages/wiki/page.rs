@@ -88,6 +88,7 @@ fn PageBody(content: WikiContent, old: bool) -> impl IntoView {
         </header>
         // The server sanitizes the view format, so it is safe to insert as HTML.
         <article class="wiki-body" inner_html=html></article>
+        <Attachments id=id.clone()/>
         <Labels id=id.clone() labels=labels/>
         <Comments id=id/>
     }
@@ -154,6 +155,103 @@ fn DeletePage(id: String) -> impl IntoView {
             </span>
         </Show>
         <ErrorText error=error/>
+    }
+}
+
+/// A file size such as `2.4 MB`.
+fn file_size(bytes: i64) -> String {
+    match bytes {
+        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1 << 20) as f64),
+        b if b >= 1 << 10 => format!("{:.1} kB", b as f64 / (1 << 10) as f64),
+        b => format!("{b} B"),
+    }
+}
+
+#[component]
+fn Attachments(id: String) -> impl IntoView {
+    let session = use_session();
+    let error = RwSignal::new(None::<String>);
+    let id = StoredValue::new(id);
+    let files = LocalResource::new(move || {
+        session.changes.track();
+        async move {
+            api::get::<WikiCollection<WikiContent>>(&format!(
+                "{}/content/{}/child/attachment?expand=version&limit=500",
+                api::WIKI,
+                id.get_value()
+            ))
+            .await
+            .map(|c| c.results)
+            .unwrap_or_default()
+        }
+    });
+    // PUT adds new files and saves a new version of files whose name is taken.
+    let upload = move |ev: leptos::ev::Event| {
+        let input: web_sys::HtmlInputElement = event_target(&ev);
+        let Some(list) = input.files() else { return };
+        let Ok(form) = web_sys::FormData::new() else {
+            return;
+        };
+        for i in 0..list.length() {
+            if let Some(file) = list.get(i) {
+                let _ = form.append_with_blob_and_filename("file", &file, &file.name());
+            }
+        }
+        input.set_value("");
+        let path = format!("{}/content/{}/child/attachment", api::WIKI, id.get_value());
+        spawn_local(async move {
+            let request = gloo_net::http::Request::put(&path)
+                .header("X-Atlassian-Token", "no-check")
+                .body(form);
+            let result = match request {
+                Ok(request) => request.send().await.map(|r| r.ok()),
+                Err(e) => Err(e),
+            };
+            match result {
+                Ok(true) => {
+                    error.set(None);
+                    session.changed();
+                }
+                _ => error.set(Some("The upload failed.".into())),
+            }
+        });
+    };
+    let remove = move |attachment: String| {
+        spawn_local(async move {
+            match api::delete(&format!("{}/attachments/{attachment}", api::WIKI2)).await {
+                Ok(()) => session.changed(),
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    view! {
+        <section class="wiki-attachments">
+            <h2 class="section-title">
+                "Attachments"
+                <label class="button subtle small">
+                    "+ Add"
+                    <input type="file" multiple class="visually-hidden" on:change=upload/>
+                </label>
+            </h2>
+            <ErrorText error=error/>
+            <ul class="attachment-grid">
+                {move || files.get().unwrap_or_default().into_iter().map(|file| {
+                    let url = file.download_url();
+                    let media_type = file.extensions["mediaType"].as_str().unwrap_or_default().to_string();
+                    let size = file_size(file.extensions["fileSize"].as_i64().unwrap_or_default());
+                    let attachment = file.id.clone();
+                    let preview = media_type.starts_with("image/") && media_type != "image/svg+xml";
+                    view! {
+                        <li class="attachment-card">
+                            {preview.then(|| view! { <img class="attachment-thumb" src=url.clone() alt=""/> })}
+                            <a href=url.clone() target="_blank" rel="noopener" class="attachment-name">{file.title.clone()}</a>
+                            <span class="muted small">{format!("{size} · v{}", file.version.number)}</span>
+                            <button class="link-button small" on:click=move |_| remove(attachment.clone())>"Delete"</button>
+                        </li>
+                    }
+                }).collect_view()}
+            </ul>
+        </section>
     }
 }
 

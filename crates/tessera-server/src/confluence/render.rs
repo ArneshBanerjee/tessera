@@ -12,6 +12,7 @@ use crate::store::content::{self, Content, Version};
 use crate::store::labels::{self, Label};
 use crate::store::spaces::{self, Space};
 use crate::store::users::{self, User};
+use crate::store::wiki_files;
 use crate::time::format_iso;
 
 /// The `expand` parameter: dotted paths such as `body.storage` or `children.page`.
@@ -329,7 +330,7 @@ impl<'a> WikiCtx<'a> {
         let space_key = space.as_ref().map(|s| s.key.clone()).unwrap_or_default();
         let id = content.id;
         let mut out = json!({
-            "id": id.to_string(),
+            "id": content_id_text(content),
             "type": content.content_type,
             "status": content.status,
             "title": content.title,
@@ -346,6 +347,9 @@ impl<'a> WikiCtx<'a> {
                 "self": self.api_url(&format!("/content/{id}")),
             },
         });
+        if content.content_type == "attachment" {
+            self.attachment_fields(content, &mut out).await?;
+        }
         let mut expandable = Map::new();
         let mut expandable_link = |key: &str, path: String| {
             expandable.insert(key.into(), json!(path));
@@ -441,8 +445,11 @@ impl<'a> WikiCtx<'a> {
         for representation in REPRESENTATIONS {
             // Convert only the formats the client asked for.
             let value = if expand.has(representation) {
-                let names = self.names().await?;
-                service::body_as(representation, &content.body, names)
+                let view = service::View {
+                    names: self.names().await?,
+                    page_id: Some(images_page(content)),
+                };
+                service::body_as(representation, &content.body, &view)
             } else {
                 None
             };
@@ -466,6 +473,33 @@ impl<'a> WikiCtx<'a> {
         expandable.insert("dynamic".into(), json!(""));
         out.insert("_expandable".into(), Value::Object(expandable));
         Ok(Value::Object(out))
+    }
+
+    /// What attachments add to content: the file's type, size, and comment, and its download link.
+    async fn attachment_fields(&mut self, attachment: &Content, out: &mut Value) -> WikiResult<()> {
+        let file =
+            wiki_files::find(&self.state.db, attachment.id, Some(attachment.version)).await?;
+        let (media_type, size, comment) = file
+            .map(|f| (f.media_type, f.size, f.comment))
+            .unwrap_or_default();
+        let container = attachment.container_id.unwrap_or_default();
+        let name = form_urlencoded::byte_serialize(attachment.title.as_bytes()).collect::<String>();
+        let download = service::download_path(container, &attachment.title);
+        out["metadata"] = json!({
+            "mediaType": media_type,
+            "comment": comment,
+            "_expandable": { "currentuser": "", "properties": "", "frontend": "", "labels": "" },
+        });
+        out["extensions"] =
+            json!({ "mediaType": media_type, "fileSize": size, "comment": comment });
+        out["_links"]["download"] = json!(format!(
+            "{download}?version={}&modificationDate={}&api=v2",
+            attachment.version, attachment.updated_at
+        ));
+        out["_links"]["webui"] = json!(format!(
+            "/pages/viewpageattachments.action?pageId={container}&preview=%2F{container}%2F{name}"
+        ));
+        Ok(())
     }
 
     /// Children of each requested type: `page`, `comment`, and `attachment`.
@@ -527,6 +561,7 @@ pub async fn child_list(
 ) -> sqlx::Result<Vec<Content>> {
     match kind {
         "page" if content.content_type == "page" => content::children(db, content.id, "page").await,
+        "attachment" => content::attachments(db, content.id).await,
         "comment" => {
             let all = content::comments(db, content.id).await?;
             Ok(all.into_iter().filter(|c| c.parent_id.is_none()).collect())
@@ -547,6 +582,23 @@ pub async fn descendant_list(
         }
         "comment" => content::comments(db, content.id).await,
         _ => Ok(Vec::new()),
+    }
+}
+
+/// The page whose attachments a body's images name: a comment's page, or the content itself.
+pub fn images_page(content: &Content) -> i64 {
+    match content.content_type.as_str() {
+        "comment" | "attachment" => content.container_id.unwrap_or(content.id),
+        _ => content.id,
+    }
+}
+
+/// Content ids as the API shows them. Attachments carry an `att` prefix, as in Confluence.
+pub fn content_id_text(content: &Content) -> String {
+    if content.content_type == "attachment" {
+        format!("att{}", content.id)
+    } else {
+        content.id.to_string()
     }
 }
 

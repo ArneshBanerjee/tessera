@@ -373,6 +373,10 @@ pub struct WikiContent {
     pub space: WikiSpaceRef,
     pub body: Value,
     pub metadata: Value,
+    /// For attachments: `mediaType`, `fileSize`, and `comment`.
+    pub extensions: Value,
+    #[serde(rename = "_links")]
+    pub links: Value,
 }
 
 impl WikiContent {
@@ -382,6 +386,14 @@ impl WikiContent {
             .as_str()
             .unwrap_or_default()
             .to_string()
+    }
+
+    /// Where to download an attachment, from the web app's origin.
+    pub fn download_url(&self) -> String {
+        format!(
+            "/wiki{}",
+            self.links["download"].as_str().unwrap_or_default()
+        )
     }
 
     pub fn labels(&self) -> Vec<String> {

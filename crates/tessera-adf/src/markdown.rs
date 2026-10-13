@@ -1,7 +1,7 @@
 //! Markdown to ADF and back, for editing rich text as Markdown.
 //!
 //! Supported: paragraphs, headings, bullet and numbered lists, code blocks, quotes, rules,
-//! hard breaks, and the marks bold, italic, strikethrough, inline code, and links. Other ADF
+//! hard breaks, images, and the marks bold, italic, strikethrough, inline code, and links. Other ADF
 //! nodes (panels, mentions, tables) keep their text when written as Markdown.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -110,9 +110,25 @@ pub fn from_markdown(markdown: &str) -> Node {
                     kind: "link".into(),
                     attrs: attrs(&[("href", json!(dest_url.to_string()))]),
                 }),
+                // The image's alt text arrives as text events until it ends.
+                Tag::Image { dest_url, .. } => {
+                    ensure_inline_parent(&mut stack);
+                    stack.push(Node::image(&dest_url, ""));
+                }
                 _ => {}
             },
             Event::End(tag) => match tag {
+                // A paragraph holding only an image becomes an image block.
+                TagEnd::Paragraph
+                    if stack.last().is_some_and(|p| {
+                        p.content.len() == 1 && p.content[0].kind == "mediaInline"
+                    }) =>
+                {
+                    let mut paragraph = stack.pop().expect("an open paragraph");
+                    let image = paragraph.content.remove(0);
+                    push(&mut stack, Node::image_block(image));
+                }
+                TagEnd::Image => close(&mut stack),
                 TagEnd::Paragraph
                 | TagEnd::Heading(_)
                 | TagEnd::BlockQuote(_)
@@ -131,7 +147,12 @@ pub fn from_markdown(markdown: &str) -> Node {
                 _ => {}
             },
             Event::Text(text) => {
-                if stack.last().is_some_and(|n| n.kind == "codeBlock") {
+                if let Some(image) = stack.last_mut().filter(|n| n.kind == "mediaInline") {
+                    let attrs = image.attrs.get_or_insert_with(Map::new);
+                    let alt = attrs.get("alt").and_then(Value::as_str).unwrap_or_default();
+                    let alt = format!("{alt}{text}");
+                    attrs.insert("alt".into(), json!(alt));
+                } else if stack.last().is_some_and(|n| n.kind == "codeBlock") {
                     let code = text.strip_suffix('\n').unwrap_or(&text);
                     push(&mut stack, Node::text(code));
                 } else {
@@ -229,6 +250,11 @@ fn block_markdown(node: &Node, indent: &str, out: &mut String) {
             }
         }
         "rule" => out.push_str(&format!("{indent}---\n")),
+        "mediaSingle" => {
+            out.push_str(indent);
+            out.push_str(&image_markdown(node));
+            out.push('\n');
+        }
         "bulletList" | "orderedList" => {
             let start = attr("order").and_then(|v| v.as_u64()).unwrap_or(1);
             for (i, item) in node.content.iter().enumerate() {
@@ -300,10 +326,19 @@ fn inline(nodes: &[Node]) -> String {
                 out.push_str(&text);
             }
             "hardBreak" => out.push('\n'),
+            "mediaInline" | "media" => out.push_str(&image_markdown(node)),
             _ => out.push_str(&crate::to_plain_text(node)),
         }
     }
     out
+}
+
+/// `![alt](source)` for an image node.
+fn image_markdown(node: &Node) -> String {
+    match node.image_source() {
+        Some((source, alt)) => format!("![{alt}]({})", source.text()),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +360,21 @@ mod tests {
         round_trip("> quoted");
         round_trip("A [link](https://example.com) here.");
         round_trip("Before\n\n---\n\nAfter");
+        round_trip("![Diagram](arch.png)");
+        round_trip("See ![logo](https://example.com/logo.png) here.");
+    }
+
+    #[test]
+    fn images_become_media_nodes() {
+        let doc = from_markdown("![Diagram](arch.png)\n\nText ![x](https://e.com/x.png)");
+        assert_eq!(doc.content[0].kind, "mediaSingle");
+        assert_eq!(doc.content[0].content[0].kind, "media");
+        let inline = &doc.content[1].content[1];
+        assert_eq!(inline.kind, "mediaInline");
+        assert_eq!(
+            inline.image_source(),
+            Some((crate::ImageSource::Url("https://e.com/x.png"), "x"))
+        );
     }
 
     #[test]

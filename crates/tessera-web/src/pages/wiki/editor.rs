@@ -150,7 +150,7 @@ fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
                 prop:value=move || title.get()
                 on:input:target=move |ev| title.set(ev.target().value())/>
             <textarea class="input editor wiki-editor" rows="24"
-                placeholder="Write in Markdown: # headings, **bold**, *italic*, lists, `code`, ``` code blocks ```, and > quotes."
+                placeholder="Write in Markdown: # headings, **bold**, *italic*, lists, `code`, ``` code blocks ```, > quotes, and ![alt](file.png) for an attached image."
                 prop:value=move || markdown.get()
                 on:input:target=move |ev| markdown.set(ev.target().value())></textarea>
             <p class="muted small">"Panels, status lozenges, and other macros are kept as their text when you edit in Markdown."</p>

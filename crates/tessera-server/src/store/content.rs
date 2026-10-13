@@ -272,6 +272,35 @@ pub async fn ancestors(db: &SqlitePool, content: &Content) -> sqlx::Result<Vec<C
     Ok(out)
 }
 
+/// Current attachments of a page or blog post, by file name.
+pub async fn attachments(db: &SqlitePool, container_id: i64) -> sqlx::Result<Vec<Content>> {
+    sqlx::query_as(concat!(
+        "SELECT ",
+        columns!(),
+        " FROM content c WHERE c.container_id = ? AND c.type = 'attachment' AND c.status = 'current'
+          ORDER BY c.title COLLATE NOCASE, c.id"
+    ))
+    .bind(container_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Ids of every attachment of a container, in any status, so their files can be removed.
+pub async fn attachment_ids(db: &SqlitePool, container_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar("SELECT id FROM content WHERE container_id = ? AND type = 'attachment'")
+        .bind(container_id)
+        .fetch_all(db)
+        .await
+}
+
+/// Ids of every attachment in a space, so their files can be removed with it.
+pub async fn attachment_ids_in_space(db: &SqlitePool, space_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar("SELECT id FROM content WHERE space_id = ? AND type = 'attachment'")
+        .bind(space_id)
+        .fetch_all(db)
+        .await
+}
+
 /// Comments on a page or blog post, oldest first.
 pub async fn comments(db: &SqlitePool, container_id: i64) -> sqlx::Result<Vec<Content>> {
     sqlx::query_as(concat!(

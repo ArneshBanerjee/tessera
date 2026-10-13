@@ -315,3 +315,12 @@ textarea.input { resize: vertical; }
 .title-input { font-size: 26px; font-weight: 600; border-color: transparent; padding: 6px 4px; margin-bottom: 10px; }
 .title-input:focus { border-color: var(--focus); }
 .wiki-editor { min-height: 420px; line-height: 1.5; }
+
+/* Confluence: attachments */
+.wiki-attachments { margin-top: 28px; }
+.attachment-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.attachment-card { display: flex; flex-direction: column; gap: 4px; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.attachment-thumb { width: 100%; height: 96px; object-fit: cover; border-radius: 4px; background: var(--surface-sunken); }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-body img { max-width: 100%; height: auto; }
+.wiki-body p.media { text-align: center; }

@@ -4,7 +4,7 @@
 //! rich text: v2 uses plain strings, v3 uses ADF documents. Handlers read [`ApiVersion`] to pick.
 
 pub mod agile;
-mod attachments;
+pub mod attachments;
 mod comments;
 pub mod extract;
 mod fields;

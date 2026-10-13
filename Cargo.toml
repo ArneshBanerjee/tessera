@@ -10,6 +10,8 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/ArneshBanerjee/tessera"
 
 [workspace.dependencies]
+percent-encoding = "2.3.2"
+mime_guess = "2.0.5"
 scraper = { version = "0.27.0", default-features = false }
 ammonia = "4.2.3"
 html-escape = "0.3.0"

@@ -8,9 +8,11 @@ use sqlx::SqlitePool;
 
 use super::error::{WikiError, WikiResult};
 use crate::AppState;
+use crate::store::attachments::SaveError;
 use crate::store::content::{self, Content, Edit, NewContent};
 use crate::store::spaces::{self, NewSpace, Space};
 use crate::store::users::{self, User};
+use crate::store::wiki_files::{self, FileVersion};
 use crate::time::now_ms;
 
 /// An id given as a JSON string or number.
@@ -21,9 +23,10 @@ pub fn content_id(value: &Value) -> Option<String> {
         .or_else(|| value.as_i64().map(|id| id.to_string()))
 }
 
-/// Content by id, in any status.
+/// Content by id, in any status. Attachment ids may carry Confluence's `att` prefix.
 pub async fn find_content(state: &AppState, id: &str) -> WikiResult<Content> {
-    let found = match id.parse::<i64>() {
+    let number = id.strip_prefix("att").unwrap_or(id);
+    let found = match number.parse::<i64>() {
         Ok(number) => content::by_id(&state.db, number).await?,
         Err(_) => None,
     };
@@ -81,7 +84,7 @@ pub fn is_view(representation: &str) -> bool {
 /// Removes anything unsafe from HTML: scripts, event handlers, and other active content.
 pub fn sanitize(html: &str) -> String {
     ammonia::Builder::default()
-        .add_tags(["details", "summary", "input", "time"])
+        .add_tags(["details", "summary", "input", "time", "img"])
         .add_generic_attributes(["class"])
         .add_tag_attributes("input", ["type", "checked"])
         .add_tag_attributes("time", ["datetime"])
@@ -92,20 +95,37 @@ pub fn sanitize(html: &str) -> String {
         .to_string()
 }
 
+/// The path of an attachment's file, relative to the Confluence base (`/wiki`).
+pub fn download_path(container_id: i64, filename: &str) -> String {
+    let name = percent_encoding::utf8_percent_encode(filename, percent_encoding::NON_ALPHANUMERIC);
+    format!("/download/attachments/{container_id}/{name}")
+}
+
+/// What drawing a body for display needs: names for mentions, and the page whose attachments
+/// its images name.
+pub struct View<'a> {
+    pub names: &'a Names,
+    pub page_id: Option<i64>,
+}
+
 /// Draws a storage-format body as safe HTML: macros become plain HTML, then it is sanitized.
-pub fn view_html(storage: &str, names: &Names) -> String {
+pub fn view_html(storage: &str, view: &View) -> String {
     let doc = tessera_adf::html::from_storage(storage);
-    let html = tessera_adf::html::to_view(&doc, &|id| names.get(id).cloned());
-    sanitize(&html)
+    let names = |id: &str| view.names.get(id).cloned();
+    let images = |name: &str| {
+        view.page_id
+            .map(|page| format!("/wiki{}", download_path(page, name)))
+    };
+    sanitize(&tessera_adf::html::to_view(&doc, &names, &images))
 }
 
 /// A storage-format body in `representation`, or `None` if Tessera cannot produce it.
-pub fn body_as(representation: &str, storage: &str, names: &Names) -> Option<String> {
+pub fn body_as(representation: &str, storage: &str, view: &View) -> Option<String> {
     Some(match representation {
         "storage" | "editor" => storage.to_string(),
         "atlas_doc_format" => serde_json::to_string(&tessera_adf::html::from_storage(storage))
             .expect("ADF serializes"),
-        r if is_view(r) => view_html(storage, names),
+        r if is_view(r) => view_html(storage, view),
         _ => return None,
     })
 }
@@ -392,11 +412,133 @@ pub async fn save(
 /// already in the trash. Comments and drafts are always deleted at once.
 pub async fn remove(state: &AppState, found: &Content, purge: bool) -> WikiResult<()> {
     match found.status.as_str() {
-        "current" if found.content_type == "comment" => content::purge(&state.db, found.id).await?,
+        "current" if found.content_type == "comment" => purge_with_files(state, found).await?,
         "current" => content::trash(&state.db, found, now_ms()).await?,
-        "trashed" if purge => content::purge(&state.db, found.id).await?,
-        "draft" => content::purge(&state.db, found.id).await?,
+        "trashed" if purge => purge_with_files(state, found).await?,
+        "draft" => purge_with_files(state, found).await?,
         _ => return Err(WikiError::content_not_found(&found.id.to_string())),
     }
     Ok(())
+}
+
+/// Deletes content for good, with the files of its attachments (or its own, if it is one).
+async fn purge_with_files(state: &AppState, found: &Content) -> WikiResult<()> {
+    let mut files = content::attachment_ids(&state.db, found.id).await?;
+    if found.content_type == "attachment" {
+        files.push(found.id);
+    }
+    content::purge(&state.db, found.id).await?;
+    for id in files {
+        wiki_files::remove_all(&state.data_dir, id).await;
+    }
+    Ok(())
+}
+
+/// The media type of an upload: what the client sent, or a guess from the file name.
+pub fn media_type(sent: Option<&str>, filename: &str) -> String {
+    match sent {
+        Some(sent) if !sent.is_empty() && sent != "application/octet-stream" => sent.to_string(),
+        _ => mime_guess::from_path(filename)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_string(),
+    }
+}
+
+/// One uploaded file.
+pub struct Upload<'a> {
+    pub filename: &'a str,
+    pub media_type: &'a str,
+    pub comment: &'a str,
+    pub minor_edit: bool,
+    pub bytes: &'a [u8],
+}
+
+/// Attaches a file to a page or blog post. With `existing`, the file becomes a new version of
+/// that attachment; otherwise the name must be new on the container.
+pub async fn attach(
+    state: &AppState,
+    user: &User,
+    container: &Content,
+    existing: Option<&Content>,
+    upload: Upload<'_>,
+) -> WikiResult<Content> {
+    if container.content_type != "page" && container.content_type != "blogpost" {
+        return Err(WikiError::bad_request(
+            "Files can only be attached to pages and blog posts",
+        ));
+    }
+    if upload.filename.trim().is_empty() {
+        return Err(WikiError::bad_request("The file needs a name"));
+    }
+    let attachment = match existing {
+        Some(found) => {
+            content::update(
+                &state.db,
+                found,
+                &Edit {
+                    title: upload.filename,
+                    body: "",
+                    status: "current",
+                    parent_id: None,
+                    author_id: user.id,
+                    now: now_ms(),
+                    message: upload.comment,
+                    minor_edit: upload.minor_edit,
+                },
+            )
+            .await?
+        }
+        None => {
+            let taken = content::attachments(&state.db, container.id)
+                .await?
+                .iter()
+                .any(|a| a.title == upload.filename);
+            if taken {
+                return Err(WikiError::bad_request(format!(
+                    "Cannot add a new attachment with same file name as an existing attachment: {}",
+                    upload.filename
+                )));
+            }
+            content::create(
+                &state.db,
+                &NewContent {
+                    content_type: "attachment",
+                    status: "current",
+                    space_id: container.space_id,
+                    parent_id: None,
+                    container_id: Some(container.id),
+                    title: upload.filename,
+                    body: "",
+                    author_id: user.id,
+                    now: now_ms(),
+                },
+            )
+            .await?
+        }
+    };
+    let file = FileVersion {
+        content_id: attachment.id,
+        version: attachment.version,
+        media_type: upload.media_type.to_string(),
+        size: upload.bytes.len() as i64,
+        comment: upload.comment.to_string(),
+    };
+    if let Err(error) = wiki_files::save(&state.db, &state.data_dir, &file, upload.bytes).await {
+        // A new attachment without its file would be broken, so it goes too.
+        if existing.is_none() {
+            let _ = content::purge(&state.db, attachment.id).await;
+        }
+        return Err(match error {
+            SaveError::Database(error) => error.into(),
+            SaveError::File(error) => {
+                tracing::error!(%error, "could not write attachment");
+                WikiError::new(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not save the attachment",
+                )
+            }
+        });
+    }
+    Ok(attachment)
 }

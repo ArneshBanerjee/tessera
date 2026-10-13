@@ -32,6 +32,25 @@ pub struct Node {
     pub attrs: Option<Map<String, Value>>,
 }
 
+/// Where an image comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSource<'a> {
+    /// A file attached to the page, by name.
+    Attachment(&'a str),
+    /// An image on the web.
+    Url(&'a str),
+}
+
+impl<'a> ImageSource<'a> {
+    /// The file name or URL.
+    pub fn text(&self) -> &'a str {
+        match self {
+            ImageSource::Attachment(name) => name,
+            ImageSource::Url(url) => url,
+        }
+    }
+}
+
 /// Inline formatting, such as `strong`, `em`, `code`, or `link`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mark {
@@ -78,6 +97,57 @@ impl Node {
 
     pub fn hard_break() -> Self {
         Self::new("hardBreak")
+    }
+
+    /// An image as an inline `mediaInline` node. A source with a scheme (`https://...`) is an
+    /// external image; anything else names an attachment of the page.
+    pub fn image(source: &str, alt: &str) -> Self {
+        let mut attrs = Map::new();
+        if source.contains("://") {
+            attrs.insert("type".into(), "external".into());
+            attrs.insert("url".into(), source.into());
+        } else {
+            attrs.insert("type".into(), "file".into());
+            attrs.insert("id".into(), "".into());
+            attrs.insert("collection".into(), "".into());
+            attrs.insert("__fileName".into(), source.into());
+        }
+        attrs.insert("alt".into(), alt.into());
+        Self {
+            attrs: Some(attrs),
+            ..Self::new("mediaInline")
+        }
+    }
+
+    /// An image on its own line: a `mediaSingle` holding one `media` node.
+    pub fn image_block(inline: Node) -> Self {
+        let media = Self {
+            kind: "media".into(),
+            ..inline
+        };
+        let mut attrs = Map::new();
+        attrs.insert("layout".into(), "center".into());
+        Self {
+            attrs: Some(attrs),
+            content: vec![media],
+            ..Self::new("mediaSingle")
+        }
+    }
+
+    /// The image a `media`, `mediaInline`, or `mediaSingle` node shows, and its alt text.
+    pub fn image_source(&self) -> Option<(ImageSource<'_>, &str)> {
+        let media = if self.kind == "mediaSingle" {
+            self.content.first()?
+        } else {
+            self
+        };
+        let attrs = media.attrs.as_ref()?;
+        let text = |key: &str| attrs.get(key).and_then(Value::as_str).unwrap_or_default();
+        let source = match text("type") {
+            "external" => ImageSource::Url(text("url")),
+            _ => ImageSource::Attachment(text("__fileName")),
+        };
+        Some((source, text("alt")))
     }
 
     fn attr(&self, name: &str) -> Option<&str> {

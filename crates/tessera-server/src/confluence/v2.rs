@@ -25,6 +25,7 @@ use crate::store::content::{self, Content, ListFilter, Version};
 use crate::store::labels;
 use crate::store::spaces::{self, Space, SpaceFilter};
 use crate::store::users::{self, User};
+use crate::store::wiki_files;
 use crate::time::format_iso;
 
 pub fn router() -> Router<AppState> {
@@ -67,6 +68,12 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_footer_comment),
         )
         .route("/footer-comments/{id}/children", get(comment_replies))
+        .route(
+            "/attachments/{id}",
+            get(get_attachment).delete(delete_attachment),
+        )
+        .route("/pages/{id}/attachments", get(attachments_of))
+        .route("/blogposts/{id}/attachments", get(attachments_of))
 }
 
 /// A v2 error.
@@ -240,8 +247,11 @@ impl<'a> V2Ctx<'a> {
             self.names = Some(service::load_names(&self.state.db).await?);
         }
         let empty = service::Names::new();
-        let names = self.names.as_ref().unwrap_or(&empty);
-        let value = service::body_as(format, &item.body, names)
+        let view = service::View {
+            names: self.names.as_ref().unwrap_or(&empty),
+            page_id: Some(super::render::images_page(item)),
+        };
+        let value = service::body_as(format, &item.body, &view)
             .ok_or_else(|| WikiError::bad_request(format!("Unsupported body-format: {format}")))?;
         Ok(json!({ format: { "representation": format, "value": value } }))
     }
@@ -278,6 +288,44 @@ impl<'a> V2Ctx<'a> {
             out["parentType"] = json!(item.parent_id.map(|_| "page"));
             out["position"] = json!(item.position);
         }
+        Ok(out)
+    }
+
+    async fn attachment(&mut self, item: &Content) -> V2Result<Value> {
+        let file = wiki_files::find(&self.state.db, item.id, Some(item.version)).await?;
+        let (media_type, size, comment) = file
+            .map(|f| (f.media_type, f.size, f.comment))
+            .unwrap_or_default();
+        let container = item.container_id.unwrap_or_default();
+        let container_type = match content::by_id(&self.state.db, container).await? {
+            Some(c) if c.content_type == "blogpost" => "blogPostId",
+            _ => "pageId",
+        };
+        let name = form_urlencoded::byte_serialize(item.title.as_bytes()).collect::<String>();
+        let download = format!(
+            "{}?version={}&api=v2",
+            service::download_path(container, &item.title),
+            item.version
+        );
+        let webui = format!(
+            "/pages/viewpageattachments.action?pageId={container}&preview=%2F{container}%2F{name}"
+        );
+        let mut out = json!({
+            "id": format!("att{}", item.id),
+            "status": item.status,
+            "title": item.title,
+            "createdAt": format_iso(item.created_at),
+            "mediaType": media_type,
+            "mediaTypeDescription": media_type,
+            "comment": comment,
+            "fileId": format!("{}-{}", item.id, item.version),
+            "fileSize": size,
+            "webuiLink": webui,
+            "downloadLink": download,
+            "version": self.current_version(item).await?,
+            "_links": { "webui": webui, "download": download },
+        });
+        out[container_type] = json!(container.to_string());
         Ok(out)
     }
 
@@ -634,7 +682,7 @@ async fn find_item(state: &AppState, id: &str, current_only: bool) -> V2Result<C
     } else {
         find_content(state, id).await?
     };
-    if found.content_type == "comment" {
+    if found.content_type != "page" && found.content_type != "blogpost" {
         return Err(WikiError::content_not_found(id).into());
     }
     Ok(found)
@@ -1082,4 +1130,66 @@ async fn comment_replies(
         )
         .await?,
     ))
+}
+
+// Attachments.
+
+async fn find_attachment(state: &AppState, id: &str) -> V2Result<Content> {
+    let found = find_content(state, id).await?;
+    if found.content_type != "attachment" {
+        return Err(WikiError::content_not_found(id).into());
+    }
+    Ok(found)
+}
+
+async fn get_attachment(
+    State(state): State<AppState>,
+    CurrentUser(_): CurrentUser,
+    Path(id): Path<String>,
+) -> V2Result<Json<Value>> {
+    let found = find_attachment(&state, &id).await?;
+    if found.status != "current" {
+        return Err(WikiError::content_not_found(&id).into());
+    }
+    Ok(Json(V2Ctx::new(&state).attachment(&found).await?))
+}
+
+/// Moves an attachment to the trash; with `purge=true`, deletes a trashed one for good.
+async fn delete_attachment(
+    State(state): State<AppState>,
+    CurrentUser(_): CurrentUser,
+    Path(id): Path<String>,
+    params: Params,
+) -> V2Result<StatusCode> {
+    let found = find_attachment(&state, &id).await?;
+    let purge = params.get("purge") == Some("true");
+    if found.status == "trashed" && !purge {
+        return Err(WikiError::content_not_found(&id).into());
+    }
+    service::remove(&state, &found, purge).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Attachments of a page or blog post, optionally filtered by `filename` and `mediaType`.
+async fn attachments_of(
+    State(state): State<AppState>,
+    CurrentUser(_): CurrentUser,
+    Path(id): Path<String>,
+    params: Params,
+) -> V2Result<Json<Value>> {
+    let container = find_item(&state, &id, true).await?;
+    let mut ctx = V2Ctx::new(&state);
+    let mut items = Vec::new();
+    for attachment in content::attachments(&state.db, container.id).await? {
+        let rendered = ctx.attachment(&attachment).await?;
+        let keep = params.get("filename").is_none_or(|f| f == attachment.title)
+            && params
+                .get("mediaType")
+                .is_none_or(|m| rendered["mediaType"] == m);
+        if keep {
+            items.push(rendered);
+        }
+    }
+    let path = format!("/{}s/{id}/attachments", container.content_type);
+    Ok(Json(paged(&state, &path, &params, items)?))
 }

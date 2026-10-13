@@ -387,3 +387,192 @@ async fn view_draws_macros_and_mentions() {
     let (_, found) = search(&app, "text ~ \"if a\"").await;
     assert_eq!(titles(&found), ["Macros"]);
 }
+
+/// A multipart body with one file part, and its content type.
+fn upload(
+    filename: &str,
+    media_type: &str,
+    bytes: &str,
+    comment: Option<&str>,
+) -> (Vec<u8>, String) {
+    let boundary = "tessera-test-boundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+         Content-Type: {media_type}\r\n\r\n{bytes}\r\n"
+    );
+    if let Some(comment) = comment {
+        body.push_str(&format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"comment\"\r\n\r\n{comment}\r\n"
+        ));
+    }
+    body.push_str(&format!("--{boundary}--\r\n"));
+    (
+        body.into_bytes(),
+        format!("multipart/form-data; boundary={boundary}"),
+    )
+}
+
+#[tokio::test]
+async fn attachments_keep_versions() {
+    use axum::http::Method;
+    let app = TestApp::new().await;
+    space(&app, "DOCS").await;
+    let page_id = id(&page(&app, "DOCS", "Guide", None).await);
+    let path = format!("{API}/content/{page_id}/child/attachment");
+
+    let (body, content_type) = upload(
+        "arch diagram.png",
+        "image/png",
+        "PNGDATA",
+        Some("First draft"),
+    );
+    let (status, _, _) = app
+        .raw(
+            Method::POST,
+            &path,
+            &[("content-type", &content_type)],
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "the XSRF header is required");
+
+    let headers = [
+        ("content-type", content_type.as_str()),
+        ("X-Atlassian-Token", "no-check"),
+    ];
+    let (status, _, bytes) = app.raw(Method::POST, &path, &headers, body.clone()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let created: Value = serde_json::from_slice(&bytes).unwrap();
+    let attachment = &created["results"][0];
+    let attachment_id = attachment["id"].as_str().unwrap().to_string();
+    assert!(attachment_id.starts_with("att"));
+    assert_eq!(attachment["title"], "arch diagram.png");
+    assert_eq!(attachment["extensions"]["mediaType"], "image/png");
+    assert_eq!(attachment["extensions"]["fileSize"], 7);
+    assert_eq!(attachment["extensions"]["comment"], "First draft");
+
+    // The same name again is refused by POST, and becomes version 2 through the data endpoint.
+    let (status, _, _) = app.raw(Method::POST, &path, &headers, body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (body, content_type) = upload("arch diagram.png", "image/png", "NEWER", None);
+    let headers2 = [
+        ("content-type", content_type.as_str()),
+        ("X-Atlassian-Token", "no-check"),
+    ];
+    let (status, _, bytes) = app
+        .raw(
+            Method::POST,
+            &format!("{path}/{attachment_id}/data"),
+            &headers2,
+            body,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let updated: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(updated["extensions"]["fileSize"], 5);
+
+    // Downloads: the latest version by default, older ones by number. Images show inline.
+    let download = updated["_links"]["download"]
+        .as_str()
+        .unwrap()
+        .split('?')
+        .next()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        download,
+        format!("/download/attachments/{page_id}/arch%20diagram%2Epng")
+    );
+    let (status, headers, bytes) = app
+        .raw(Method::GET, &format!("/wiki{download}"), &[], Vec::new())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, b"NEWER");
+    assert!(
+        headers["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("inline")
+    );
+    let (_, _, bytes) = app
+        .raw(
+            Method::GET,
+            &format!("/wiki{download}?version=1"),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(bytes, b"PNGDATA");
+
+    // Files that could run script are always downloaded, never shown.
+    let (body, content_type) = upload("page.html", "text/html", "<script>alert(1)</script>", None);
+    let headers3 = [
+        ("content-type", content_type.as_str()),
+        ("X-Atlassian-Token", "no-check"),
+    ];
+    app.raw(Method::POST, &path, &headers3, body).await;
+    let (_, headers, _) = app
+        .raw(
+            Method::GET,
+            &format!("/wiki/download/attachments/{page_id}/page.html"),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(headers["content-type"], "application/octet-stream");
+    assert!(
+        headers["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment")
+    );
+
+    // Listing, filtering, and v2.
+    let (_, list) = app.get(&format!("{path}?filename=page.html")).await;
+    assert_eq!(list["size"], 1);
+    let (_, v2) = app
+        .get(&format!("/wiki/api/v2/pages/{page_id}/attachments"))
+        .await;
+    assert_eq!(v2["results"].as_array().unwrap().len(), 2);
+    assert_eq!(v2["results"][0]["pageId"], json!(page_id));
+
+    // Images in the page body point at the attachment.
+    let (_, read) = app
+        .get(&format!("{API}/content/{page_id}?expand=version"))
+        .await;
+    let number = read["version"]["number"].as_i64().unwrap() + 1;
+    let (status, edited) = app
+        .put(
+            &format!("{API}/content/{page_id}?expand=body.view"),
+            json!({ "type": "page", "title": "Guide", "version": { "number": number },
+                    "body": { "storage": { "representation": "storage", "value": "<ac:image><ri:attachment ri:filename=\"arch diagram.png\" /></ac:image>" } } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(
+        edited["body"]["view"]["value"],
+        format!(
+            "<p class=\"media\"><img src=\"/wiki/download/attachments/{page_id}/arch%20diagram%2Epng\" alt=\"\"></p>"
+        )
+    );
+
+    // Trash, then purge, removes the attachment.
+    let (status, _) = app.delete(&format!("{API}/content/{attachment_id}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = app
+        .delete(&format!("{API}/content/{attachment_id}?status=trashed"))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, list) = app.get(&path).await;
+    assert_eq!(list["size"], 1);
+}

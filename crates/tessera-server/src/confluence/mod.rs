@@ -3,6 +3,7 @@
 //! - `/wiki/rest/api`: the v1 API (spaces, content, children, history, labels, CQL search).
 //! - `/wiki/api/v2`: the v2 API (spaces, pages, blog posts, footer comments, versions, labels).
 
+mod attachments;
 mod content;
 pub mod cql;
 pub mod error;
@@ -13,12 +14,14 @@ mod spaces;
 mod v2;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::routing::{get, post};
 use serde_json::Value;
 
 use crate::AppState;
+use crate::api::attachments::UPLOAD_LIMIT;
 use crate::api::extract::Json;
 use crate::auth::CurrentUser;
 use crate::store::users;
@@ -27,6 +30,10 @@ use render::WikiCtx;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route(
+            "/wiki/download/attachments/{page}/{filename}",
+            get(attachments::download),
+        )
         .nest("/wiki/rest/api", v1())
         .nest("/wiki/api/v2", v2::router())
 }
@@ -49,6 +56,17 @@ fn v1() -> Router<AppState> {
                 .delete(content::delete),
         )
         .route("/content/{id}/child", get(content::children))
+        .route(
+            "/content/{id}/child/attachment",
+            get(attachments::list)
+                .post(attachments::create)
+                .put(attachments::create_or_update)
+                .layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
+        )
+        .route(
+            "/content/{id}/child/attachment/{attachment}/data",
+            post(attachments::update_data).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
+        )
         .route("/content/{id}/child/{kind}", get(content::children_of_type))
         .route("/content/{id}/descendant", get(content::descendants))
         .route(
@@ -210,7 +228,14 @@ async fn convert_body(
     let converted = match to.as_str() {
         "storage" | "editor" => value.to_string(),
         "view" | "export_view" | "styled_view" | "anonymous_export_view" => {
-            service::view_html(value, &service::load_names(&state.db).await?)
+            let names = service::load_names(&state.db).await?;
+            service::view_html(
+                value,
+                &service::View {
+                    names: &names,
+                    page_id: None,
+                },
+            )
         }
         _ => {
             return Err(WikiError::bad_request(format!(

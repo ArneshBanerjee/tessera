@@ -10,7 +10,9 @@ Usage: uv run scripts/compat/python_confluence.py <base-url> <email> <api-token>
 The script expects a server with no spaces. It exits non-zero on the first failed check.
 """
 
+import os
 import sys
+import tempfile
 
 from atlassian import Confluence
 
@@ -59,6 +61,20 @@ check("labels", [l["name"] for l in labels["results"]] == ["howto"])
 wiki.add_comment(page_id, "<p>Looks good</p>")
 comments = wiki.get_page_comments(page_id, expand="body.storage", depth="")
 check("comments", comments["results"][0]["body"]["storage"]["value"] == "<p>Looks good</p>")
+
+notes = os.path.join(tempfile.mkdtemp(), "notes.txt")
+with open(notes, "w") as f:
+    f.write("first")
+wiki.attach_file(notes, name="notes.txt", content_type="text/plain", page_id=page_id, comment="Notes")
+with open(notes, "w") as f:
+    f.write("second")
+# The client finds the existing file and uploads a new version of it.
+wiki.attach_file(notes, name="notes.txt", content_type="text/plain", page_id=page_id)
+files = wiki.get_attachments_from_content(page_id, expand="version")["results"]
+check("attachment uploaded", [a["title"] for a in files] == ["notes.txt"])
+check("attachment versioned", files[0]["version"]["number"] == 2)
+link = files[0]["_links"]["download"]
+check("attachment download", wiki.get(link.lstrip("/"), not_json_response=True) == b"second")
 
 results = wiki.cql('space = COMPAT and type = page and title ~ "install"')
 check("cql search", [r["content"]["title"] for r in results["results"]] == ["Install"])

@@ -10,7 +10,7 @@ use scraper::node::Node as HtmlNode;
 use scraper::{ElementRef, Html};
 use serde_json::{Map, Value, json};
 
-use crate::{Mark, Node};
+use crate::{ImageSource, Mark, Node};
 
 // ADF to storage, and to HTML for display.
 
@@ -19,6 +19,7 @@ pub fn to_storage(doc: &Node) -> String {
     let writer = Writer {
         view: false,
         names: &|_| None,
+        attachment_url: &|_| None,
     };
     let mut out = String::new();
     writer.blocks(&doc.content, &mut out);
@@ -27,9 +28,18 @@ pub fn to_storage(doc: &Node) -> String {
 
 /// Writes an ADF document as plain HTML for display, with macros drawn as HTML: code blocks
 /// as `pre`, panels as `div.panel`, expands as `details`, and so on. `names` gives the display
-/// name for a mention's account id. The output is not sanitized; callers must sanitize it.
-pub fn to_view(doc: &Node, names: &dyn Fn(&str) -> Option<String>) -> String {
-    let writer = Writer { view: true, names };
+/// name for a mention's account id, and `attachment_url` the address of an attached image.
+/// The output is not sanitized; callers must sanitize it.
+pub fn to_view(
+    doc: &Node,
+    names: &dyn Fn(&str) -> Option<String>,
+    attachment_url: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    let writer = Writer {
+        view: true,
+        names,
+        attachment_url,
+    };
     let mut out = String::new();
     writer.blocks(&doc.content, &mut out);
     out
@@ -66,7 +76,14 @@ fn parameter(name: &str, value: &str, out: &mut String) {
 fn is_inline(kind: &str) -> bool {
     matches!(
         kind,
-        "text" | "hardBreak" | "mention" | "emoji" | "status" | "inlineCard" | "date"
+        "text"
+            | "hardBreak"
+            | "mention"
+            | "emoji"
+            | "status"
+            | "inlineCard"
+            | "date"
+            | "mediaInline"
     )
 }
 
@@ -75,6 +92,7 @@ fn is_inline(kind: &str) -> bool {
 struct Writer<'a> {
     view: bool,
     names: &'a dyn Fn(&str) -> Option<String>,
+    attachment_url: &'a dyn Fn(&str) -> Option<String>,
 }
 
 impl Writer<'_> {
@@ -119,6 +137,12 @@ impl Writer<'_> {
             "blockquote" => self.wrapped("<blockquote>", "</blockquote>", node, out),
             "codeBlock" => self.code_block(node, out),
             "rule" => out.push_str("<hr />"),
+            "mediaSingle" if self.view => {
+                out.push_str("<p class=\"media\">");
+                self.image(node, out);
+                out.push_str("</p>");
+            }
+            "mediaSingle" => self.image(node, out),
             "panel" => {
                 let kind = attr_str(node, "panelType");
                 if self.view {
@@ -198,6 +222,41 @@ impl Writer<'_> {
                 out.push_str("</p>");
             }
             _ => self.blocks(&node.content, out),
+        }
+    }
+
+    /// An image: `ac:image` in storage, `img` in the view.
+    fn image(&self, node: &Node, out: &mut String) {
+        let Some((source, alt)) = node.image_source() else {
+            return;
+        };
+        let alt_attr = if alt.is_empty() {
+            String::new()
+        } else {
+            format!(" ac:alt=\"{}\"", escape(alt))
+        };
+        if !self.view {
+            let target = match source {
+                ImageSource::Attachment(name) => {
+                    format!("<ri:attachment ri:filename=\"{}\" />", escape(name))
+                }
+                ImageSource::Url(url) => format!("<ri:url ri:value=\"{}\" />", escape(url)),
+            };
+            out.push_str(&format!("<ac:image{alt_attr}>{target}</ac:image>"));
+            return;
+        }
+        let src = match source {
+            ImageSource::Attachment(name) => (self.attachment_url)(name),
+            ImageSource::Url(url) => Some(url.to_string()),
+        };
+        match src {
+            Some(src) => out.push_str(&format!(
+                "<img src=\"{}\" alt=\"{}\" />",
+                escape(&src),
+                escape(alt)
+            )),
+            // Without an address, the alt text stands in.
+            None => out.push_str(&escape(if alt.is_empty() { source.text() } else { alt })),
         }
     }
 
@@ -319,6 +378,7 @@ impl Writer<'_> {
                     out.push_str("</ac:structured-macro>");
                 }
             }
+            "mediaInline" | "media" => self.image(node, out),
             "inlineCard" => {
                 let url = escape(attr_str(node, "url"));
                 out.push_str(&format!("<a href=\"{url}\">{url}</a>"));
@@ -415,7 +475,8 @@ fn block_children(element: ElementRef, out: &mut Vec<Node>) {
             .iter()
             .all(|n| n.kind == "text" && n.text.as_deref().is_none_or(|t| t.trim().is_empty()));
         if !blank {
-            out.push(Node::paragraph(trim_inline(std::mem::take(pending))));
+            let paragraph = Node::paragraph(trim_inline(std::mem::take(pending)));
+            out.push(lone_image_to_block(paragraph));
         }
         pending.clear();
     };
@@ -467,7 +528,10 @@ fn block_element(element: ElementRef) -> Option<Vec<Node>> {
         content
     };
     Some(match name {
-        "p" => vec![Node::paragraph(inline_content(element))],
+        "p" => vec![lone_image_to_block(Node::paragraph(inline_content(
+            element,
+        )))],
+        "ac:image" => vec![Node::image_block(image_node(element))],
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
             let level: u64 = name[1..].parse().unwrap_or(1);
             vec![Node {
@@ -536,6 +600,26 @@ fn block_element(element: ElementRef) -> Option<Vec<Node>> {
         }
         _ => return None,
     })
+}
+
+/// An `ac:image` as an inline image node.
+fn image_node(element: ElementRef) -> Node {
+    let alt = element.value().attr("ac:alt").unwrap_or_default();
+    let source = child(element, "ri:attachment")
+        .and_then(|a| a.value().attr("ri:filename"))
+        .or_else(|| child(element, "ri:url").and_then(|u| u.value().attr("ri:value")))
+        .unwrap_or_default();
+    Node::image(source, alt)
+}
+
+/// A paragraph that holds only an image becomes an image block, as Confluence's editor
+/// writes it.
+fn lone_image_to_block(mut paragraph: Node) -> Node {
+    if paragraph.content.len() == 1 && paragraph.content[0].kind == "mediaInline" {
+        Node::image_block(paragraph.content.remove(0))
+    } else {
+        paragraph
+    }
 }
 
 /// ADF requires list items, quotes, and cells to hold at least one block.
@@ -764,6 +848,7 @@ fn inline_element(element: ElementRef, marks: &[Mark], out: &mut Vec<Node>) {
             }
         }
         "br" => out.push(Node::hard_break()),
+        "ac:image" => out.push(image_node(element)),
         "ac:link" => {
             match child(element, "ri:user").and_then(|u| u.value().attr("ri:account-id")) {
                 Some(id) => out.push(Node {
@@ -868,8 +953,26 @@ mod tests {
         let storage = "<ac:structured-macro ac:name=\"code\" ac:schema-version=\"1\"><ac:parameter ac:name=\"language\">sh</ac:parameter><ac:plain-text-body><![CDATA[echo <hi>]]></ac:plain-text-body></ac:structured-macro><p><ac:link><ri:user ri:account-id=\"u1\" /></ac:link> see</p>";
         let names = |id: &str| (id == "u1").then(|| "Jane".to_string());
         assert_eq!(
-            to_view(&from_storage(storage), &names),
+            to_view(&from_storage(storage), &names, &|_| None),
             "<pre><code class=\"language-sh\">echo &lt;hi&gt;</code></pre><p><span class=\"mention\">@Jane</span> see</p>"
+        );
+    }
+
+    #[test]
+    fn images_in_storage_and_view() {
+        round_trip(
+            "<ac:image ac:alt=\"Diagram\"><ri:attachment ri:filename=\"arch.png\" /></ac:image>",
+        );
+        round_trip(
+            "<p>Logo <ac:image><ri:url ri:value=\"https://e.com/l.png\" /></ac:image> here</p>",
+        );
+        let doc =
+            from_storage("<p><ac:image><ri:attachment ri:filename=\"a b.png\" /></ac:image></p>");
+        assert_eq!(doc.content[0].kind, "mediaSingle");
+        let url = |name: &str| Some(format!("/files/{name}"));
+        assert_eq!(
+            to_view(&doc, &|_| None, &url),
+            "<p class=\"media\"><img src=\"/files/a b.png\" alt=\"\" /></p>"
         );
     }
 
