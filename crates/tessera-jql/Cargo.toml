@@ -1,0 +1,12 @@
+[package]
+name = "tessera-jql"
+description = "Parser for the Jira Query Language (JQL), built from Atlassian's public JQL reference."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+logos.workspace = true
+thiserror.workspace = true

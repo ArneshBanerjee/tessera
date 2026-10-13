@@ -1,0 +1,3 @@
+/target
+# Atlassian's API specs are downloaded by scripts/fetch-specs.sh and are not ours to redistribute.
+/spec
