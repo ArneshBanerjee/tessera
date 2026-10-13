@@ -78,6 +78,37 @@ check("createmeta", "summary" in meta["projects"][0]["issuetypes"][0]["fields"])
 field_names = {f["name"] for f in jira.fields()}
 check("fields", {"Summary", "Status", "Assignee"} <= field_names)
 
+component = jira.create_component("Backend", "COMPAT")
+check("component created", [c.name for c in jira.project_components("COMPAT")] == ["Backend"])
+version = jira.create_version("1.0", "COMPAT", releaseDate="2026-12-01")
+check("version created", [v.name for v in jira.project_versions("COMPAT")] == ["1.0"])
+issue = jira.issue("COMPAT-2")
+issue.update(fields={"components": [{"name": "Backend"}], "fixVersions": [{"name": "1.0"}]})
+issue = jira.issue("COMPAT-2")
+check("components and versions on an issue",
+      issue.fields.components[0].name == "Backend" and issue.fields.fixVersions[0].name == "1.0")
+check("search by component", [i.key for i in jira.search_issues("component = Backend")] == ["COMPAT-2"])
+
+check("creator watches", jira.watchers("COMPAT-2").watchCount == 1)
+jira.remove_watcher("COMPAT-2", me["accountId"])
+check("watcher removed", jira.watchers("COMPAT-2").watchCount == 0)
+jira.add_watcher("COMPAT-2", me["accountId"])
+check("watcher added", jira.watchers("COMPAT-2").isWatching)
+
+check("link types", {t.name for t in jira.issue_link_types()} >= {"Blocks", "Relates"})
+jira.create_issue_link("Blocks", "COMPAT-3", "COMPAT-2")
+links = jira.issue("COMPAT-2").fields.issuelinks
+check("issue link", len(links) == 1 and links[0].type.name == "Blocks")
+
+jira.add_worklog("COMPAT-2", timeSpent="2h", comment="Worked")
+worklogs = jira.worklogs("COMPAT-2")
+check("worklog", len(worklogs) == 1 and worklogs[0].timeSpentSeconds == 7200)
+
+import io
+attachment = jira.add_attachment("COMPAT-2", attachment=io.BytesIO(b"compat file"), filename="compat.txt")
+check("attachment uploaded", attachment.filename == "compat.txt" and attachment.size == 11)
+check("attachment content", jira.attachment(attachment.id).get() == b"compat file")
+
 jira.issue("COMPAT-5").delete()
 check("issue deleted", len(jira.search_issues("project = COMPAT", maxResults=False)) == 4)
 

@@ -124,6 +124,76 @@ pub const SYSTEM_FIELDS: &[SystemField] = &[
         items: Some("comment"),
         ..field("comment", "Comment", "comments-page", &["comment"], false)
     },
+    SystemField {
+        items: Some("component"),
+        ..field("components", "Components", "array", &["component"], true)
+    },
+    SystemField {
+        items: Some("version"),
+        ..field(
+            "fixVersions",
+            "Fix versions",
+            "array",
+            &["fixVersion"],
+            true,
+        )
+    },
+    SystemField {
+        items: Some("version"),
+        ..field(
+            "versions",
+            "Affects versions",
+            "array",
+            &["affectedVersion"],
+            true,
+        )
+    },
+    field("timetracking", "Time tracking", "timetracking", &[], true),
+    field("timespent", "Time Spent", "number", &["timespent"], false),
+    field(
+        "timeoriginalestimate",
+        "Original estimate",
+        "number",
+        &["originalEstimate", "timeoriginalestimate"],
+        false,
+    ),
+    field(
+        "timeestimate",
+        "Remaining Estimate",
+        "number",
+        &["remainingEstimate", "timeestimate"],
+        false,
+    ),
+    field("workratio", "Work Ratio", "number", &["workratio"], false),
+    SystemField {
+        items: Some("attachment"),
+        ..field("attachment", "Attachment", "array", &["attachments"], false)
+    },
+    SystemField {
+        items: Some("issuelinks"),
+        ..field(
+            "issuelinks",
+            "Linked Issues",
+            "array",
+            &["issueLink"],
+            false,
+        )
+    },
+    field(
+        "watches",
+        "Watchers",
+        "watches",
+        &["watcher", "watchers"],
+        false,
+    ),
+    field("votes", "Votes", "votes", &["voter", "votes"], false),
+    field(
+        "worklog",
+        "Log Work",
+        "array",
+        &["worklogAuthor", "worklogComment", "worklogDate"],
+        false,
+    ),
     field(
         "issuekey",
         "Key",

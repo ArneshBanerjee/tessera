@@ -22,21 +22,27 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`:
 | Issues | Create, read, edit, delete, assign, `changelog`, `createmeta`, `editmeta`, the `fields` and `expand` parameters |
 | Workflow | Transitions, with resolution set and cleared as in Jira's simplified workflow |
 | Comments | Create, read, update, delete, with author checks |
+| Components | Create, read, update, delete (moving issues), issue counts, automatic assignee from component or project lead |
+| Versions | Create, read, update, delete (moving issues), reorder, issue counts, release and archive flags |
+| Watchers and votes | Watch, unwatch, vote, unvote, with Jira's rules (no votes on your own or resolved issues). Creators and commenters watch automatically. |
+| Issue links | Link types, create and delete links (with Jira's inward and outward naming), `issuelinks` on issues |
+| Worklogs | Log, edit, and delete work, with remaining estimate adjustment (`auto`, `new`, `manual`, `leave`) and time tracking fields |
+| Attachments | Upload (multipart, with Jira's XSRF header check), download, delete, metadata |
 | Fields | System fields, custom fields (text, number, date, user, select, multi-select, labels) and their options |
 | Search | `search` and `search/jql`, with paging, `names`, and the rules below |
 | Metadata | Issue types, statuses, status categories, priorities, resolutions, permission, notification and security schemes |
 
-**JQL** follows Jira's rules: `=`, `!=`, `IN`, `NOT IN`, `IS EMPTY`, `~`, comparisons, `WAS`, `WAS IN`, `WAS NOT`, `CHANGED` with `FROM`, `TO`, `BY`, `AFTER`, `BEFORE`, `ON`, `DURING`, relative dates (`-7d`), date functions (`startOfWeek(-1)`, `endOfMonth()`), `currentUser()`, custom fields by name or `cf[id]`, and `ORDER BY`. Errors use Jira's wording.
+**JQL** follows Jira's rules: `=`, `!=`, `IN`, `NOT IN`, `IS EMPTY`, `~`, comparisons, `WAS`, `WAS IN`, `WAS NOT`, `CHANGED` with `FROM`, `TO`, `BY`, `AFTER`, `BEFORE`, `ON`, `DURING`, relative dates (`-7d`), date functions (`startOfWeek(-1)`, `endOfMonth()`), `currentUser()`, custom fields by name or `cf[id]`, and `ORDER BY`. It also searches components, fix and affected versions (with `releasedVersions()`, `unreleasedVersions()`, `latestReleasedVersion()`, `earliestUnreleasedVersion()`), watchers and voters (`watchedIssues()`, `votedIssues()`), links (`linkedIssues()`, `issueLinkType`), time tracking (`timespent > 4h`), worklogs, and attachments. Errors use Jira's wording.
 
 Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Web UI, boards and sprints, attachments, issue links, watchers, votes, worklogs, components, versions, project roles and fine-grained permissions, Confluence, and import of Atlassian backups. Issues return these fields empty, so clients do not break.
+Web UI, boards and sprints, project roles and fine-grained permissions, notifications, Confluence, and import of Atlassian backups.
 
 ## Compatibility
 
-`scripts/compat/run.sh` starts a throwaway server and drives it with the official Python [`jira`](https://pypi.org/project/jira/) client, unchanged: projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, and deletion. CI runs it on every push.
+`scripts/compat/run.sh` starts a throwaway server and drives it with the official Python [`jira`](https://pypi.org/project/jira/) client, unchanged: projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, components, versions, watchers, links, worklogs, attachments, and deletion. CI runs it on every push.
 
 ## Run it
 
@@ -53,6 +59,7 @@ The server listens on `127.0.0.1:8080` and stores data in `tessera.db`.
 | Database | `--database` | `TESSERA_DATABASE` | `sqlite://tessera.db` |
 | Listen address | `--addr` | `TESSERA_ADDR` | `127.0.0.1:8080` |
 | Public URL | `--base-url` | `TESSERA_BASE_URL` | `http://<addr>` |
+| Data directory (attachments) | `--data-dir` | `TESSERA_DATA_DIR` | `tessera-data` |
 
 On a fresh database, `TESSERA_ADMIN_EMAIL` and `TESSERA_ADMIN_PASSWORD` create the first administrator at startup.
 
@@ -93,7 +100,7 @@ scripts/compat/run.sh
 | --- | --- |
 | 1. Foundation | Workspace, JQL parser, server. **Done.** |
 | 2. Jira core API | Users, projects, issues, workflows, comments, custom fields, JQL search, history. **Done.** |
-| 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions, roles, permissions. |
+| 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions. **Done.** Roles and permissions follow. |
 | 4. Boards | Scrum and Kanban boards, sprints, backlog, and the Agile REST API. |
 | 5. Web UI | Leptos (Rust compiled to WebAssembly) app, and a Tauri desktop app. |
 | 6. Confluence core | Spaces, page tree, rich-text editor, comments, and core macros. |

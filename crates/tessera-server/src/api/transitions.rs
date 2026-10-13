@@ -105,18 +105,16 @@ pub async fn perform(
     let entering_done = ctx.catalog.is_done(transition.to_status_id);
 
     // Apply the status and resolution first, then any fields sent with the transition.
-    let labels = issues::labels(&state.db, issue.id).await?;
-    let before = IssueFields::from_issue(&issue, labels);
-    let mut moved = issue.clone();
-    moved.status_id = transition.to_status_id;
-    if entering_done && moved.resolution_id.is_none() {
-        moved.resolution_id = ctx.catalog.default_resolution();
-        moved.resolution_date = Some(now_ms());
+    let before = IssueFields::load(&state.db, &issue).await?;
+    let mut after = before.clone();
+    after.status_id = transition.to_status_id;
+    if entering_done && after.resolution_id.is_none() {
+        after.resolution_id = ctx.catalog.default_resolution();
+        after.resolution_date = Some(now_ms());
     } else if !entering_done {
-        moved.resolution_id = None;
-        moved.resolution_date = None;
+        after.resolution_id = None;
+        after.resolution_date = None;
     }
-    let after = IssueFields::from_issue(&moved, before.labels.clone());
     let custom = super::issue_fields::CustomCatalog::load(&state.db).await?;
     let changes = super::issue_fields::diff(&mut ctx, &custom, &before, &[], &after).await?;
     issues::update(&state.db, issue.id, user.id, &after, &changes).await?;

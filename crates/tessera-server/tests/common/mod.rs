@@ -42,9 +42,12 @@ impl TestApp {
         let token = auth::create_api_token(&pool, admin.id, "tests")
             .await
             .expect("token");
+        let data_dir =
+            std::env::temp_dir().join(format!("tessera-test-{}", uuid::Uuid::new_v4().simple()));
         let state = AppState {
             db: pool,
             base_url: BASE.into(),
+            data_dir,
         };
         Self {
             router: app(state.clone()),
@@ -102,6 +105,33 @@ impl TestApp {
                 .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()))
         };
         (status, json)
+    }
+
+    /// A request with any headers and body; returns status, headers, and raw bytes.
+    pub async fn raw(
+        &self,
+        method: Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+    ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, self.admin.clone());
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = self
+            .router
+            .clone()
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, headers, bytes.to_vec())
     }
 
     pub async fn get(&self, path: &str) -> (StatusCode, Value) {

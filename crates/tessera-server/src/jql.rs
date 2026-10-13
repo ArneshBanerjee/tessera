@@ -14,10 +14,13 @@ use tessera_jql::ast::{
     Clause, Direction, Field, Operand, Operator, OrderBy, Predicate, Query, Terminal,
 };
 
+use crate::store::components::Component;
 use crate::store::fields::{CustomCatalog, CustomField};
+use crate::store::links::LinkType;
 use crate::store::meta::Catalog;
 use crate::store::projects::Project;
 use crate::store::users::User;
+use crate::store::versions::Version;
 use crate::time;
 
 /// What the compiler needs to resolve names and functions.
@@ -26,6 +29,9 @@ pub struct SearchContext<'a> {
     pub custom: &'a CustomCatalog,
     pub projects: &'a [Project],
     pub users: &'a [User],
+    pub components: &'a [Component],
+    pub versions: &'a [Version],
+    pub link_types: &'a [LinkType],
     pub current_user: Option<i64>,
     pub now: i64,
 }
@@ -97,7 +103,38 @@ enum Kind<'a> {
     Key,
     Parent,
     Custom(&'a CustomField),
+    Component,
+    /// `kind` is `fix` (fixVersion) or `affects` (affectedVersion).
+    Version {
+        kind: &'static str,
+    },
+    /// Who watches or voted: `table` is `watchers` or `votes`.
+    People {
+        table: &'static str,
+    },
+    /// How many people watch or voted.
+    PeopleCount {
+        table: &'static str,
+    },
+    LinkType,
+    /// A duration in seconds, compared with values such as `4h`.
+    Duration {
+        expr: &'static str,
+    },
+    WorkRatio,
+    WorklogAuthor,
+    WorklogDate,
+    WorklogComment,
+    Attachments,
 }
+
+/// Total seconds logged on the issue, as SQL.
+const TIME_SPENT: &str =
+    "(SELECT SUM(w.time_spent_seconds) FROM worklogs w WHERE w.issue_id = i.id)";
+
+/// Logged time as a percentage of the original estimate, as SQL.
+const WORK_RATIO: &str = "(CASE WHEN i.original_estimate > 0 THEN \
+     COALESCE((SELECT SUM(w.time_spent_seconds) FROM worklogs w WHERE w.issue_id = i.id), 0) * 100 / i.original_estimate END)";
 
 /// A single value after lists are flattened.
 #[derive(Clone, Copy)]
@@ -205,6 +242,26 @@ impl<'a> Compiler<'a> {
                     "due" | "duedate" => Kind::DueDate,
                     "key" | "issuekey" | "issue" | "id" => Kind::Key,
                     "parent" => Kind::Parent,
+                    "component" => Kind::Component,
+                    "fixversion" => Kind::Version { kind: "fix" },
+                    "affectedversion" => Kind::Version { kind: "affects" },
+                    "watcher" => Kind::People { table: "watchers" },
+                    "voter" => Kind::People { table: "votes" },
+                    "watchers" => Kind::PeopleCount { table: "watchers" },
+                    "votes" => Kind::PeopleCount { table: "votes" },
+                    "issuelinktype" => Kind::LinkType,
+                    "timespent" => Kind::Duration { expr: TIME_SPENT },
+                    "originalestimate" | "timeoriginalestimate" => Kind::Duration {
+                        expr: "i.original_estimate",
+                    },
+                    "remainingestimate" | "timeestimate" => Kind::Duration {
+                        expr: "i.remaining_estimate",
+                    },
+                    "workratio" => Kind::WorkRatio,
+                    "worklogauthor" => Kind::WorklogAuthor,
+                    "worklogdate" => Kind::WorklogDate,
+                    "worklogcomment" => Kind::WorklogComment,
+                    "attachments" => Kind::Attachments,
                     _ => {
                         return self
                             .ctx
@@ -286,6 +343,94 @@ impl<'a> Compiler<'a> {
             Kind::DueDate => self.due_date(op, &atoms, &name),
             Kind::Key => self.key(op, &atoms, &name),
             Kind::Parent => self.parent(op, &atoms, &name),
+            Kind::Component => {
+                let ids = self.component_ids(&atoms, &name)?;
+                let any = "EXISTS (SELECT 1 FROM issue_components ic WHERE ic.issue_id = i.id)";
+                let with = "EXISTS (SELECT 1 FROM issue_components ic WHERE ic.issue_id = i.id AND ic.component_id IN ({}))";
+                self.relation(any, with, &ids.0, ids.1, op, &name)
+            }
+            Kind::Version { kind } => self.version(kind, op, &atoms, &name),
+            Kind::People { table } => {
+                let (ids, empty) = self.ids(
+                    Kind::User {
+                        column: "",
+                        history: None,
+                    },
+                    &name,
+                    &atoms,
+                )?;
+                let any = format!("EXISTS (SELECT 1 FROM {table} p WHERE p.issue_id = i.id)");
+                let with = format!(
+                    "EXISTS (SELECT 1 FROM {table} p WHERE p.issue_id = i.id AND p.user_id IN ({{}}))"
+                );
+                self.relation(&any, &with, &ids, empty, op, &name)
+            }
+            Kind::PeopleCount { table } => {
+                let numbers = numbers(&atoms, &name)?;
+                let expr = format!("(SELECT COUNT(*) FROM {table} p WHERE p.issue_id = i.id)");
+                self.compare(&expr, op, numbers, &name)
+            }
+            Kind::LinkType => self.link_type(op, &atoms, &name),
+            Kind::Duration { expr } => {
+                if matches!(op, Operator::Is | Operator::IsNot) {
+                    let not = if op == Operator::IsNot { "NOT " } else { "" };
+                    return Ok(format!("{expr} IS {not}NULL"));
+                }
+                let seconds = durations(&atoms, &name)?;
+                self.compare(expr, op, seconds, &name)
+            }
+            Kind::WorkRatio => {
+                let numbers = numbers(&atoms, &name)?;
+                self.compare(WORK_RATIO, op, numbers, &name)
+            }
+            Kind::WorklogAuthor => {
+                let (ids, empty) = self.ids(
+                    Kind::User {
+                        column: "",
+                        history: None,
+                    },
+                    &name,
+                    &atoms,
+                )?;
+                let any = "EXISTS (SELECT 1 FROM worklogs w WHERE w.issue_id = i.id)";
+                let with = "EXISTS (SELECT 1 FROM worklogs w WHERE w.issue_id = i.id AND w.author_id IN ({}))";
+                self.relation(any, with, &ids, empty, op, &name)
+            }
+            Kind::WorklogDate => {
+                if matches!(op, Operator::Is | Operator::IsNot) {
+                    let not = if op == Operator::Is { "NOT " } else { "" };
+                    return Ok(format!(
+                        "{not}EXISTS (SELECT 1 FROM worklogs w WHERE w.issue_id = i.id)"
+                    ));
+                }
+                let condition = self.date("w.started", op, &atoms, &name)?;
+                Ok(format!(
+                    "EXISTS (SELECT 1 FROM worklogs w WHERE w.issue_id = i.id AND {condition})"
+                ))
+            }
+            Kind::WorklogComment => {
+                if !matches!(op, Operator::Contains | Operator::NotContains) {
+                    return Err(unsupported(op, &name));
+                }
+                let text = single_text(&atoms, &name)?;
+                let condition = self.like_all("w.comment_text", text);
+                let exists = format!(
+                    "EXISTS (SELECT 1 FROM worklogs w WHERE w.issue_id = i.id AND {condition})"
+                );
+                Ok(if op == Operator::NotContains {
+                    format!("NOT {exists}")
+                } else {
+                    exists
+                })
+            }
+            Kind::Attachments => {
+                let exists = "EXISTS (SELECT 1 FROM attachments a WHERE a.issue_id = i.id)";
+                match op {
+                    Operator::Is => Ok(format!("NOT {exists}")),
+                    Operator::IsNot => Ok(exists.into()),
+                    _ => Err(unsupported(op, &name)),
+                }
+            }
             Kind::Custom(field) => self.custom(field, op, &atoms, &name),
         }
     }
@@ -628,6 +773,30 @@ impl<'a> Compiler<'a> {
     }
 
     fn key(&mut self, op: Operator, atoms: &[Atom], name: &str) -> Result<String> {
+        // Functions such as linkedIssues() produce sets of issues.
+        if atoms.iter().any(|a| matches!(a, Atom::Function(..))) {
+            if !matches!(
+                op,
+                Operator::In | Operator::NotIn | Operator::Equals | Operator::NotEquals
+            ) {
+                return Err(unsupported(op, name));
+            }
+            let mut sets = Vec::new();
+            for &atom in atoms {
+                let Atom::Function(function, args) = atom else {
+                    return Err(JqlError(format!(
+                        "Mixing values and functions is not supported for the field '{name}'."
+                    )));
+                };
+                sets.push(self.issue_function(function, args, name)?);
+            }
+            let any = format!("({})", sets.join(" OR "));
+            return Ok(if matches!(op, Operator::NotIn | Operator::NotEquals) {
+                format!("NOT {any}")
+            } else {
+                any
+            });
+        }
         let values: Vec<&str> = atoms
             .iter()
             .map(|&a| match a {
@@ -873,6 +1042,310 @@ impl<'a> Compiler<'a> {
         })
     }
 
+    /// A condition from an issue function: `linkedIssues(KEY[, description])`,
+    /// `watchedIssues()`, or `votedIssues()`.
+    fn issue_function(&mut self, function: &str, args: &[String], name: &str) -> Result<String> {
+        match function.to_ascii_lowercase().as_str() {
+            "watchedissues" | "votedissues" => {
+                let table = if function.eq_ignore_ascii_case("watchedIssues") {
+                    "watchers"
+                } else {
+                    "votes"
+                };
+                self.binds
+                    .push(Bind::Int(self.ctx.current_user.unwrap_or(-1)));
+                Ok(format!(
+                    "i.id IN (SELECT issue_id FROM {table} WHERE user_id = ?)"
+                ))
+            }
+            "linkedissues" => {
+                let key = args.first().ok_or_else(|| {
+                    JqlError("Function 'linkedIssues' expects an issue key.".into())
+                })?;
+                // The issue whose links we follow, as a subquery on its key or id.
+                let origin = |binds: &mut Vec<Bind>| match key.parse::<i64>() {
+                    Ok(id) => {
+                        binds.push(Bind::Int(id));
+                        "?".to_string()
+                    }
+                    Err(_) => {
+                        binds.push(Bind::Text(key.clone()));
+                        "(SELECT id FROM issues WHERE key = ? COLLATE NOCASE)".to_string()
+                    }
+                };
+                let Some(description) = args.get(1) else {
+                    let outward = origin(&mut self.binds);
+                    let inward = origin(&mut self.binds);
+                    return Ok(format!(
+                        "i.id IN (SELECT inward_issue_id FROM issue_links WHERE outward_issue_id = {outward} \
+                         UNION SELECT outward_issue_id FROM issue_links WHERE inward_issue_id = {inward})"
+                    ));
+                };
+                let mut sets = Vec::new();
+                for (link_type_id, outward) in link_directions(self.ctx.link_types, description) {
+                    let from = origin(&mut self.binds);
+                    sets.push(if outward {
+                        format!("SELECT inward_issue_id FROM issue_links WHERE outward_issue_id = {from} AND link_type_id = {link_type_id}")
+                    } else {
+                        format!("SELECT outward_issue_id FROM issue_links WHERE inward_issue_id = {from} AND link_type_id = {link_type_id}")
+                    });
+                }
+                if sets.is_empty() {
+                    return Err(JqlError(format!(
+                        "Issue link type '{description}' does not exist."
+                    )));
+                }
+                Ok(format!("i.id IN ({})", sets.join(" UNION ")))
+            }
+            _ => Err(function_not_supported(function, name)),
+        }
+    }
+
+    /// Membership in a related set, such as components, watchers, or worklog authors.
+    /// `with` holds `{}` where the id placeholders go. Follows Jira's rules: negative operators
+    /// do not match issues where the set is empty.
+    fn relation(
+        &mut self,
+        any: &str,
+        with: &str,
+        ids: &[i64],
+        empty: bool,
+        op: Operator,
+        name: &str,
+    ) -> Result<String> {
+        let has = |binds: &mut Vec<Bind>| {
+            binds.extend(ids.iter().map(|id| Bind::Int(*id)));
+            with.replace("{}", &placeholders(ids.len()))
+        };
+        Ok(match op {
+            Operator::Is => format!("NOT {any}"),
+            Operator::IsNot => any.to_string(),
+            Operator::Equals | Operator::In => {
+                let mut parts = Vec::new();
+                if !ids.is_empty() {
+                    parts.push(has(&mut self.binds));
+                }
+                if empty {
+                    parts.push(format!("NOT {any}"));
+                }
+                if parts.is_empty() {
+                    return Ok("0".into());
+                }
+                format!("({})", parts.join(" OR "))
+            }
+            Operator::NotEquals | Operator::NotIn => {
+                if ids.is_empty() {
+                    any.to_string()
+                } else {
+                    format!("({any} AND NOT {})", has(&mut self.binds))
+                }
+            }
+            _ => return Err(unsupported(op, name)),
+        })
+    }
+
+    fn component_ids(&self, atoms: &[Atom], name: &str) -> Result<(Vec<i64>, bool)> {
+        let mut ids = Vec::new();
+        let mut empty = false;
+        for &atom in atoms {
+            match atom {
+                Atom::Empty => empty = true,
+                Atom::Value(text) => {
+                    let found: Vec<i64> = self
+                        .ctx
+                        .components
+                        .iter()
+                        .filter(|c| c.name.eq_ignore_ascii_case(text) || c.id.to_string() == text)
+                        .map(|c| c.id)
+                        .collect();
+                    if found.is_empty() {
+                        return Err(JqlError(format!(
+                            "The value '{text}' does not exist for the field '{name}'."
+                        )));
+                    }
+                    ids.extend(found);
+                }
+                Atom::Function(function, _) => return Err(function_not_supported(function, name)),
+            }
+        }
+        Ok((ids, empty))
+    }
+
+    /// Versions named by values or functions such as `releasedVersions(PROJ)`.
+    fn version_ids(&self, atoms: &[Atom], name: &str) -> Result<(Vec<i64>, bool)> {
+        let mut ids = Vec::new();
+        let mut empty = false;
+        for &atom in atoms {
+            match atom {
+                Atom::Empty => empty = true,
+                Atom::Value(text) => {
+                    let found: Vec<i64> = self
+                        .ctx
+                        .versions
+                        .iter()
+                        .filter(|v| v.name.eq_ignore_ascii_case(text) || v.id.to_string() == text)
+                        .map(|v| v.id)
+                        .collect();
+                    if found.is_empty() {
+                        return Err(JqlError(format!(
+                            "The value '{text}' does not exist for the field '{name}'."
+                        )));
+                    }
+                    ids.extend(found);
+                }
+                Atom::Function(function, args) => {
+                    ids.extend(self.version_function(function, args, name)?)
+                }
+            }
+        }
+        Ok((ids, empty))
+    }
+
+    fn version_function(&self, function: &str, args: &[String], name: &str) -> Result<Vec<i64>> {
+        // An optional project argument narrows the versions to that project.
+        let project_ids: Vec<i64> = match args.first() {
+            None => self.ctx.projects.iter().map(|p| p.id).collect(),
+            Some(project) => {
+                let found: Vec<i64> = self
+                    .ctx
+                    .projects
+                    .iter()
+                    .filter(|p| {
+                        p.key.eq_ignore_ascii_case(project)
+                            || p.name.eq_ignore_ascii_case(project)
+                            || p.id.to_string() == *project
+                    })
+                    .map(|p| p.id)
+                    .collect();
+                if found.is_empty() {
+                    return Err(JqlError(format!("The project '{project}' does not exist.")));
+                }
+                found
+            }
+        };
+        let in_projects = |v: &&Version| project_ids.contains(&v.project_id);
+        let lower = function.to_ascii_lowercase();
+        let ids: Vec<i64> = match lower.as_str() {
+            "releasedversions" => self
+                .ctx
+                .versions
+                .iter()
+                .filter(in_projects)
+                .filter(|v| v.released)
+                .map(|v| v.id)
+                .collect(),
+            "unreleasedversions" => self
+                .ctx
+                .versions
+                .iter()
+                .filter(in_projects)
+                .filter(|v| !v.released && !v.archived)
+                .map(|v| v.id)
+                .collect(),
+            "latestreleasedversion" | "earliestunreleasedversion" => {
+                if args.is_empty() {
+                    return Err(JqlError(format!(
+                        "Function '{function}' expects a project."
+                    )));
+                }
+                // Per project: the released version with the latest release date (then
+                // order), or the unreleased version that comes first in order.
+                let mut picked = Vec::new();
+                for project_id in &project_ids {
+                    let candidates = self
+                        .ctx
+                        .versions
+                        .iter()
+                        .filter(|v| v.project_id == *project_id && !v.archived);
+                    let pick = if lower == "latestreleasedversion" {
+                        candidates.filter(|v| v.released).max_by(|a, b| {
+                            (&a.release_date, a.sequence).cmp(&(&b.release_date, b.sequence))
+                        })
+                    } else {
+                        candidates
+                            .filter(|v| !v.released)
+                            .min_by_key(|v| v.sequence)
+                    };
+                    picked.extend(pick.map(|v| v.id));
+                }
+                picked
+            }
+            _ => return Err(function_not_supported(function, name)),
+        };
+        // A function that finds no versions matches nothing, rather than everything.
+        Ok(if ids.is_empty() { vec![-1] } else { ids })
+    }
+
+    fn version(&mut self, kind: &str, op: Operator, atoms: &[Atom], name: &str) -> Result<String> {
+        if is_comparison(op) {
+            // Earlier or later than a version, by its order within the project.
+            let (ids, _) = self.version_ids(atoms, name)?;
+            let target = ids
+                .first()
+                .and_then(|id| self.ctx.versions.iter().find(|v| v.id == *id))
+                .ok_or_else(|| unsupported(op, name))?;
+            self.binds.push(Bind::Text(kind.into()));
+            self.binds.push(Bind::Int(target.project_id));
+            self.binds.push(Bind::Int(target.sequence));
+            return Ok(format!(
+                "EXISTS (SELECT 1 FROM issue_versions iv JOIN versions v ON v.id = iv.version_id \
+                 WHERE iv.issue_id = i.id AND iv.kind = ? AND v.project_id = ? AND v.sequence {op} ?)"
+            ));
+        }
+        let (ids, empty) = self.version_ids(atoms, name)?;
+        // `kind` is one of two fixed strings, so writing it into the SQL is safe.
+        let any = format!(
+            "EXISTS (SELECT 1 FROM issue_versions iv WHERE iv.issue_id = i.id AND iv.kind = '{kind}')"
+        );
+        let with = format!(
+            "EXISTS (SELECT 1 FROM issue_versions iv WHERE iv.issue_id = i.id AND iv.kind = '{kind}' AND iv.version_id IN ({{}}))"
+        );
+        self.relation(&any, &with, &ids, empty, op, name)
+    }
+
+    /// `issueLinkType = "blocks"`: issues with a link described that way from their side.
+    fn link_type(&mut self, op: Operator, atoms: &[Atom], name: &str) -> Result<String> {
+        let any = "EXISTS (SELECT 1 FROM issue_links l WHERE l.outward_issue_id = i.id OR l.inward_issue_id = i.id)";
+        if matches!(op, Operator::Is | Operator::IsNot) {
+            return Ok(if op == Operator::Is {
+                format!("NOT {any}")
+            } else {
+                any.into()
+            });
+        }
+        let mut conditions = Vec::new();
+        for &atom in atoms {
+            let Atom::Value(description) = atom else {
+                return Err(unsupported(op, name));
+            };
+            let before = conditions.len();
+            for (link_type_id, outward) in link_directions(self.ctx.link_types, description) {
+                let side = if outward {
+                    "outward_issue_id"
+                } else {
+                    "inward_issue_id"
+                };
+                conditions.push(format!(
+                    "(l.{side} = i.id AND l.link_type_id = {link_type_id})"
+                ));
+            }
+            if conditions.len() == before {
+                return Err(JqlError(format!(
+                    "The value '{description}' does not exist for the field '{name}'."
+                )));
+            }
+        }
+        let with = format!(
+            "EXISTS (SELECT 1 FROM issue_links l WHERE {})",
+            conditions.join(" OR ")
+        );
+        match op {
+            Operator::Equals | Operator::In => Ok(with),
+            Operator::NotEquals | Operator::NotIn => Ok(format!("({any} AND NOT {with})")),
+            _ => Err(unsupported(op, name)),
+        }
+    }
+
     /// `WAS`, `WAS IN`, `WAS NOT`, `WAS NOT IN`, and `CHANGED`, over the issue history.
     fn history(&mut self, kind: Kind, name: &str, terminal: &Terminal) -> Result<String> {
         let op = terminal.operator;
@@ -1054,6 +1527,11 @@ impl<'a> Compiler<'a> {
                 Kind::Date { column } => format!("i.{column}"),
                 Kind::DueDate => "i.due_date".into(),
                 Kind::Parent => "i.parent_id".into(),
+                Kind::PeopleCount { table } => {
+                    format!("(SELECT COUNT(*) FROM {table} p WHERE p.issue_id = i.id)")
+                }
+                Kind::Duration { expr } => expr.to_string(),
+                Kind::WorkRatio => WORK_RATIO.to_string(),
                 Kind::Custom(field) => {
                     let value = format!(
                         "(SELECT {} FROM issue_field_values v WHERE v.issue_id = i.id AND v.field_id = {})",
@@ -1212,4 +1690,68 @@ fn invalid_key(key: &str, name: &str) -> JqlError {
     JqlError(format!(
         "The issue key '{key}' for field '{name}' is invalid."
     ))
+}
+
+/// The directions a link description names: `(link type id, from the outward side?)`.
+/// Descriptions ("blocks", "is blocked by") are matched first; a link type name ("Blocks")
+/// is used only when no description matches, and then covers both directions.
+fn link_directions(link_types: &[LinkType], description: &str) -> Vec<(i64, bool)> {
+    let by_description: Vec<(i64, bool)> = link_types
+        .iter()
+        .flat_map(|t| {
+            let outward = t
+                .outward
+                .eq_ignore_ascii_case(description)
+                .then_some((t.id, true));
+            let inward = t
+                .inward
+                .eq_ignore_ascii_case(description)
+                .then_some((t.id, false));
+            outward.into_iter().chain(inward)
+        })
+        .collect();
+    if !by_description.is_empty() {
+        return by_description;
+    }
+    link_types
+        .iter()
+        .filter(|t| t.name.eq_ignore_ascii_case(description))
+        .flat_map(|t| [(t.id, true), (t.id, false)])
+        .collect()
+}
+
+/// Whole numbers from JQL values, for counts and percentages.
+fn numbers(atoms: &[Atom], name: &str) -> Result<Vec<Bind>> {
+    atoms
+        .iter()
+        .map(|a| match a {
+            Atom::Value(text) => text.parse::<i64>().map(Bind::Int).map_err(|_| {
+                JqlError(format!(
+                    "The value '{text}' is not a valid number for the field '{name}'."
+                ))
+            }),
+            other => Err(JqlError(format!(
+                "The value '{}' is not valid for the field '{name}'.",
+                describe(*other)
+            ))),
+        })
+        .collect()
+}
+
+/// Durations such as `4h` or `1w 2d`, in seconds.
+fn durations(atoms: &[Atom], name: &str) -> Result<Vec<Bind>> {
+    atoms
+        .iter()
+        .map(|a| match a {
+            Atom::Value(text) => time::parse_duration(text).map(Bind::Int).ok_or_else(|| {
+                JqlError(format!(
+                    "The value '{text}' is not a valid duration for the field '{name}'."
+                ))
+            }),
+            other => Err(JqlError(format!(
+                "The value '{}' is not valid for the field '{name}'.",
+                describe(*other)
+            ))),
+        })
+        .collect()
 }

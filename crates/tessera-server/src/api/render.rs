@@ -11,15 +11,21 @@ use serde_json::{Value, json};
 use super::ApiVersion;
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
+use crate::store::attachments::Attachment;
+use crate::store::links::LinkType;
 use crate::store::meta::{Catalog, IssueType, Priority, Resolution, Status, StatusCategory};
 use crate::store::projects::Project;
 use crate::store::users::{self, User};
+use crate::store::versions::Version;
+use crate::store::worklogs::Worklog;
 
 /// Per-request rendering context: where links point, which API version, and cached lookups.
 pub struct Ctx {
     pub state: AppState,
     pub version: ApiVersion,
     pub catalog: Catalog,
+    /// The signed-in user, for per-viewer fields such as `isWatching`.
+    pub viewer: Option<i64>,
     users: HashMap<i64, Option<User>>,
 }
 
@@ -29,8 +35,15 @@ impl Ctx {
             catalog: Catalog::load(&state.db).await?,
             state: state.clone(),
             version,
+            viewer: None,
             users: HashMap::new(),
         })
+    }
+
+    /// Sets the user the response is for.
+    pub fn viewed_by(mut self, user_id: i64) -> Self {
+        self.viewer = Some(user_id);
+        self
     }
 
     /// An absolute URL to a REST resource, for `self` links.
@@ -152,6 +165,69 @@ impl Ctx {
         })
     }
 
+    pub fn version_json(&self, version: &Version) -> Value {
+        let mut value = json!({
+            "self": self.api_url(&format!("/version/{}", version.id)),
+            "id": version.id.to_string(),
+            "description": version.description,
+            "name": version.name,
+            "archived": version.archived,
+            "released": version.released,
+            "projectId": version.project_id,
+        });
+        if let Some(start) = &version.start_date {
+            value["startDate"] = json!(start);
+            value["userStartDate"] = json!(user_date(start));
+        }
+        if let Some(release) = &version.release_date {
+            value["releaseDate"] = json!(release);
+            value["userReleaseDate"] = json!(user_date(release));
+            // Overdue: not released, and the release date has passed.
+            let today = crate::time::format(crate::time::now_ms())[..10].to_string();
+            value["overdue"] = json!(!version.released && release.as_str() < today.as_str());
+        }
+        value
+    }
+
+    pub fn link_type_json(&self, link_type: &LinkType) -> Value {
+        json!({
+            "id": link_type.id.to_string(),
+            "name": link_type.name,
+            "inward": link_type.inward,
+            "outward": link_type.outward,
+            "self": self.api_url(&format!("/issueLinkType/{}", link_type.id)),
+        })
+    }
+
+    pub async fn attachment_json(&mut self, attachment: &Attachment) -> ApiResult<Value> {
+        Ok(json!({
+            "self": self.api_url(&format!("/attachment/{}", attachment.id)),
+            "id": attachment.id.to_string(),
+            "filename": attachment.filename,
+            "author": self.user_ref(Some(attachment.author_id)).await?,
+            "created": crate::time::format(attachment.created_at),
+            "size": attachment.size,
+            "mimeType": attachment.mime_type,
+            "content": self.api_url(&format!("/attachment/content/{}", attachment.id)),
+        }))
+    }
+
+    pub async fn worklog_json(&mut self, worklog: &Worklog) -> ApiResult<Value> {
+        Ok(json!({
+            "self": self.api_url(&format!("/issue/{}/worklog/{}", worklog.issue_id, worklog.id)),
+            "author": self.user_ref(Some(worklog.author_id)).await?,
+            "updateAuthor": self.user_ref(Some(worklog.update_author_id)).await?,
+            "comment": self.rich_text(worklog.comment.as_deref()),
+            "created": crate::time::format(worklog.created_at),
+            "updated": crate::time::format(worklog.updated_at),
+            "started": crate::time::format(worklog.started),
+            "timeSpent": crate::time::format_duration(worklog.time_spent_seconds),
+            "timeSpentSeconds": worklog.time_spent_seconds,
+            "id": worklog.id.to_string(),
+            "issueId": worklog.issue_id.to_string(),
+        }))
+    }
+
     /// Rich text for output: an ADF document in v3, a plain string in v2.
     pub fn rich_text(&self, adf_json: Option<&str>) -> Value {
         let Some(doc) = adf_json.and_then(|json| serde_json::from_str::<Value>(json).ok()) else {
@@ -191,6 +267,13 @@ pub fn rich_text_input(field: &str, value: &Value) -> ApiResult<Option<String>> 
             "Operation value must be a string or an Atlassian Document.",
         )),
     }
+}
+
+/// A date as Jira shows it to people: `2026-10-13` becomes `13/Oct/26`.
+fn user_date(date: &str) -> String {
+    crate::time::parse_date(date)
+        .map(|d| d.strftime("%d/%b/%y").to_string())
+        .unwrap_or_else(|| date.to_string())
 }
 
 /// A file-name-safe version of a name, for icon URLs: "Won't Do" becomes "wont-do".

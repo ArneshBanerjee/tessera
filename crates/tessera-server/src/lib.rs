@@ -10,6 +10,8 @@ pub mod jql;
 pub mod store;
 pub mod time;
 
+use std::path::PathBuf;
+
 use axum::Router;
 use sqlx::SqlitePool;
 
@@ -19,6 +21,8 @@ pub struct AppState {
     pub db: SqlitePool,
     /// The public URL clients use to reach this server, without a trailing slash.
     pub base_url: String,
+    /// Where files such as attachments are stored.
+    pub data_dir: PathBuf,
 }
 
 /// Builds the whole HTTP application.

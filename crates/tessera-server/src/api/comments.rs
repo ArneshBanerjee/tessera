@@ -13,6 +13,7 @@ use crate::AppState;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
 use crate::store::comments::{self, Comment};
+use crate::store::social::{self, List};
 
 #[derive(Deserialize)]
 pub struct CommentRequest {
@@ -66,6 +67,8 @@ pub async fn create(
     let issue = find_issue(&state, &id_or_key).await?;
     let comment =
         comments::create(&state.db, issue.id, user.id, &parse_body(&request.body)?).await?;
+    // Commenting makes you a watcher, as with Jira's default autowatch setting.
+    social::add(&state.db, List::Watchers, issue.id, user.id).await?;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok((
         StatusCode::CREATED,

@@ -2,6 +2,8 @@
 
 use sqlx::{SqliteConnection, SqlitePool};
 
+use crate::store::components;
+use crate::store::versions::{self, Kind};
 use crate::time::now_ms;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -28,6 +30,9 @@ pub struct Issue {
     pub due_date: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Time tracking estimates, in seconds.
+    pub original_estimate: Option<i64>,
+    pub remaining_estimate: Option<i64>,
 }
 
 /// The columns every query of this table selects, for `concat!` into static SQL.
@@ -35,7 +40,7 @@ macro_rules! columns {
     () => {
         "id, project_id, number, key, issue_type_id, summary, description, environment, \
      status_id, priority_id, resolution_id, resolution_date, assignee_id, reporter_id, creator_id, \
-     parent_id, due_date, created_at, updated_at"
+     parent_id, due_date, created_at, updated_at, original_estimate, remaining_estimate"
     };
 }
 
@@ -68,13 +73,22 @@ pub struct IssueFields {
     pub parent_id: Option<i64>,
     pub due_date: Option<String>,
     pub labels: Vec<String>,
+    pub components: Vec<i64>,
+    pub fix_versions: Vec<i64>,
+    pub affects_versions: Vec<i64>,
+    /// Seconds.
+    pub original_estimate: Option<i64>,
+    /// Seconds.
+    pub remaining_estimate: Option<i64>,
     /// Custom field id and its JSON value. `None` clears the value.
     pub custom_values: Vec<(i64, Option<String>)>,
 }
 
 impl IssueFields {
-    pub fn from_issue(issue: &Issue, labels: Vec<String>) -> Self {
-        Self {
+    /// The current state of an issue, including its labels, components, and versions.
+    /// Custom values are left empty; callers that edit them load them separately.
+    pub async fn load(db: &SqlitePool, issue: &Issue) -> sqlx::Result<Self> {
+        Ok(Self {
             issue_type_id: issue.issue_type_id,
             summary: issue.summary.clone(),
             description: issue.description.clone(),
@@ -87,9 +101,14 @@ impl IssueFields {
             reporter_id: issue.reporter_id,
             parent_id: issue.parent_id,
             due_date: issue.due_date.clone(),
-            labels,
+            labels: labels(db, issue.id).await?,
+            components: components::of_issue(db, issue.id).await?,
+            fix_versions: versions::of_issue(db, issue.id, Kind::Fix).await?,
+            affects_versions: versions::of_issue(db, issue.id, Kind::Affects).await?,
+            original_estimate: issue.original_estimate,
+            remaining_estimate: issue.remaining_estimate,
             custom_values: Vec::new(),
-        }
+        })
     }
 }
 
@@ -118,8 +137,9 @@ pub async fn create(
     let now = now_ms();
     let issue: Issue = sqlx::query_as(concat!("INSERT INTO issues (project_id, number, key, issue_type_id, summary, description, environment,
             description_text, environment_text, status_id, priority_id, resolution_id, resolution_date,
-            assignee_id, reporter_id, creator_id, parent_id, due_date, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            assignee_id, reporter_id, creator_id, parent_id, due_date, created_at, updated_at,
+            original_estimate, remaining_estimate)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING ", columns!()))
     .bind(project_id)
     .bind(number)
@@ -141,10 +161,11 @@ pub async fn create(
     .bind(&fields.due_date)
     .bind(now)
     .bind(now)
+    .bind(fields.original_estimate)
+    .bind(fields.remaining_estimate)
     .fetch_one(&mut *tx)
     .await?;
-    replace_labels(&mut tx, issue.id, &fields.labels).await?;
-    write_custom_values(&mut tx, issue.id, &fields.custom_values).await?;
+    write_relations(&mut tx, issue.id, fields).await?;
     tx.commit().await?;
     Ok(issue)
 }
@@ -163,7 +184,7 @@ pub async fn update(
         "UPDATE issues SET issue_type_id = ?, summary = ?, description = ?, environment = ?,
             description_text = ?, environment_text = ?, status_id = ?, priority_id = ?,
             resolution_id = ?, resolution_date = ?, assignee_id = ?, reporter_id = ?, parent_id = ?,
-            due_date = ?, updated_at = ?
+            due_date = ?, original_estimate = ?, remaining_estimate = ?, updated_at = ?
          WHERE id = ?",
     )
     .bind(fields.issue_type_id)
@@ -180,17 +201,31 @@ pub async fn update(
     .bind(fields.reporter_id)
     .bind(fields.parent_id)
     .bind(&fields.due_date)
+    .bind(fields.original_estimate)
+    .bind(fields.remaining_estimate)
     .bind(now)
     .bind(issue_id)
     .execute(&mut *tx)
     .await?;
-    replace_labels(&mut tx, issue_id, &fields.labels).await?;
-    write_custom_values(&mut tx, issue_id, &fields.custom_values).await?;
+    write_relations(&mut tx, issue_id, fields).await?;
     if !changes.is_empty() {
         crate::store::changelog::record(&mut tx, issue_id, author_id, now, changes).await?;
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// Writes the list-valued fields: labels, components, versions, and custom values.
+async fn write_relations(
+    tx: &mut SqliteConnection,
+    issue_id: i64,
+    fields: &IssueFields,
+) -> sqlx::Result<()> {
+    replace_labels(tx, issue_id, &fields.labels).await?;
+    components::set_for_issue(tx, issue_id, &fields.components).await?;
+    versions::set_for_issue(tx, issue_id, Kind::Fix, &fields.fix_versions).await?;
+    versions::set_for_issue(tx, issue_id, Kind::Affects, &fields.affects_versions).await?;
+    write_custom_values(tx, issue_id, &fields.custom_values).await
 }
 
 async fn replace_labels(

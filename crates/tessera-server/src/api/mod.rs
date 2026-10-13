@@ -3,20 +3,26 @@
 //! Every route is served under both `/rest/api/2` and `/rest/api/3`. The versions differ only in
 //! rich text: v2 uses plain strings, v3 uses ADF documents. Handlers read [`ApiVersion`] to pick.
 
+mod attachments;
 mod comments;
 mod fields;
 mod issue_fields;
 mod issues;
+mod links;
 mod meta;
+mod parts;
 mod projects;
 pub mod render;
 mod schemes;
 mod search;
 mod server_info;
 mod session;
+mod social;
 mod transitions;
 mod users;
+mod worklogs;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use axum::{Extension, Router};
 use serde::Deserialize;
@@ -172,6 +178,93 @@ fn jira_routes() -> Router<AppState> {
             get(comments::get)
                 .put(comments::update)
                 .delete(comments::delete),
+        )
+        .route(
+            "/issue/{id_or_key}/watchers",
+            get(social::watchers)
+                .post(social::add_watcher)
+                .delete(social::remove_watcher),
+        )
+        .route(
+            "/issue/{id_or_key}/votes",
+            get(social::votes)
+                .post(social::add_vote)
+                .delete(social::remove_vote),
+        )
+        .route(
+            "/issue/{id_or_key}/worklog",
+            get(worklogs::list).post(worklogs::create),
+        )
+        .route(
+            "/issue/{id_or_key}/worklog/{id}",
+            get(worklogs::get)
+                .put(worklogs::update)
+                .delete(worklogs::delete),
+        )
+        .route(
+            "/issue/{id_or_key}/attachments",
+            post(attachments::upload).layer(DefaultBodyLimit::max(attachments::UPLOAD_LIMIT)),
+        )
+        // Attachments
+        .route("/attachment/meta", get(attachments::meta))
+        .route(
+            "/attachment/{id}",
+            get(attachments::get).delete(attachments::delete),
+        )
+        .route("/attachment/content/{id}", get(attachments::content))
+        // Issue links
+        .route("/issueLink", post(links::create))
+        .route("/issueLink/{id}", get(links::get).delete(links::delete))
+        .route("/issueLinkType", get(links::types).post(links::create_type))
+        .route(
+            "/issueLinkType/{id}",
+            get(links::get_type)
+                .put(links::update_type)
+                .delete(links::delete_type),
+        )
+        // Components and versions
+        .route("/component", post(parts::create_component))
+        .route(
+            "/component/{id}",
+            get(parts::get_component)
+                .put(parts::update_component)
+                .delete(parts::delete_component),
+        )
+        .route(
+            "/component/{id}/relatedIssueCounts",
+            get(parts::component_issue_count),
+        )
+        .route(
+            "/project/{id_or_key}/components",
+            get(parts::project_components),
+        )
+        .route(
+            "/project/{id_or_key}/component",
+            get(parts::project_components_paged),
+        )
+        .route("/version", post(parts::create_version))
+        .route(
+            "/version/{id}",
+            get(parts::get_version)
+                .put(parts::update_version)
+                .delete(parts::delete_version),
+        )
+        .route("/version/{id}/move", post(parts::move_version))
+        .route(
+            "/version/{id}/relatedIssueCounts",
+            get(parts::version_issue_counts),
+        )
+        .route(
+            "/version/{id}/unresolvedIssueCount",
+            get(parts::version_unresolved_count),
+        )
+        .route(
+            "/project/{id_or_key}/versions",
+            get(parts::project_versions),
+        )
+        .route(
+            "/project/{id_or_key}/version",
+            get(parts::project_versions_paged),
         )
         // Search
         .route("/search", get(search::get).post(search::post))

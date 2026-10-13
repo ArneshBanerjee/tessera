@@ -13,7 +13,7 @@ use crate::store::fields::CustomField;
 use crate::store::issues::{self, ChangeItem, IssueFields};
 use crate::store::meta::{find_by_ref, json_id};
 use crate::store::projects::Project;
-use crate::store::users;
+use crate::store::{components, users, versions};
 use crate::time;
 
 /// Whether the request creates a new issue or edits an existing one.
@@ -66,7 +66,17 @@ pub async fn apply(
                         set_field(ctx, custom, project, target, name, value, mode).await?;
                     }
                     (_, "add" | "remove") => {
-                        apply_list_operation(custom, target, name, verb == "add", value)?;
+                        let db = ctx.state.db.clone();
+                        apply_list_operation(
+                            &db,
+                            custom,
+                            project,
+                            target,
+                            name,
+                            verb == "add",
+                            value,
+                        )
+                        .await?;
                     }
                     _ => {
                         return Err(ApiError::field(
@@ -160,6 +170,11 @@ async fn set_field(
         "assignee" => target.assignee_id = user_ref(&ctx.state.db, "assignee", value).await?,
         "reporter" => target.reporter_id = user_ref(&ctx.state.db, "reporter", value).await?,
         "labels" => target.labels = labels("labels", value)?,
+        "components" | "fixVersions" | "versions" => {
+            let part = Part::from_name(name).expect("matched above");
+            *part.list_mut(target) = part_ids(&ctx.state.db, project.id, part, value).await?;
+        }
+        "timetracking" => set_time_tracking(target, value)?,
         "duedate" => {
             target.due_date = match value {
                 Value::Null => None,
@@ -205,6 +220,140 @@ async fn set_field(
         }
         // Read-only fields, and fields Tessera does not have yet.
         other => return Err(cannot_set(other)),
+    }
+    Ok(())
+}
+
+/// The list fields that refer to project parts: components and versions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    Components,
+    FixVersions,
+    AffectsVersions,
+}
+
+impl Part {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "components" => Some(Self::Components),
+            "fixVersions" => Some(Self::FixVersions),
+            "versions" => Some(Self::AffectsVersions),
+            _ => None,
+        }
+    }
+
+    fn list_mut(self, fields: &mut IssueFields) -> &mut Vec<i64> {
+        match self {
+            Self::Components => &mut fields.components,
+            Self::FixVersions => &mut fields.fix_versions,
+            Self::AffectsVersions => &mut fields.affects_versions,
+        }
+    }
+
+    fn list(self, fields: &IssueFields) -> &[i64] {
+        match self {
+            Self::Components => &fields.components,
+            Self::FixVersions => &fields.fix_versions,
+            Self::AffectsVersions => &fields.affects_versions,
+        }
+    }
+
+    /// The field id, and the name Jira's history uses for it.
+    fn history_names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Components => ("components", "Component"),
+            Self::FixVersions => ("fixVersions", "Fix Version"),
+            Self::AffectsVersions => ("versions", "Version"),
+        }
+    }
+}
+
+/// Resolves `[{"id": ...}, {"name": ...}]` to component or version ids in the project.
+async fn part_ids(
+    db: &SqlitePool,
+    project_id: i64,
+    part: Part,
+    value: &Value,
+) -> ApiResult<Vec<i64>> {
+    let (field, _) = part.history_names();
+    let items = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(items) => items,
+        _ => return Err(ApiError::field(field, "Operation value must be an array.")),
+    };
+    // (id, name) pairs of the project's components or versions.
+    let available: Vec<(i64, String)> = match part {
+        Part::Components => components::for_project(db, project_id)
+            .await?
+            .into_iter()
+            .map(|c| (c.id, c.name))
+            .collect(),
+        Part::FixVersions | Part::AffectsVersions => versions::for_project(db, project_id)
+            .await?
+            .into_iter()
+            .map(|v| (v.id, v.name))
+            .collect(),
+    };
+    let what = if part == Part::Components {
+        "Component"
+    } else {
+        "Version"
+    };
+    let mut ids = Vec::new();
+    for item in items {
+        let found = if let Some(id) = item.get("id").and_then(json_id) {
+            available
+                .iter()
+                .find(|(candidate, _)| *candidate == id)
+                .ok_or_else(|| {
+                    ApiError::field(field, format!("{what} with id '{id}' does not exist."))
+                })?
+        } else {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::field(field, format!("{what} id or name is required.")))?;
+            available
+                .iter()
+                .find(|(_, candidate)| candidate.eq_ignore_ascii_case(name))
+                .ok_or_else(|| {
+                    ApiError::field(field, format!("{what} name '{name}' is not valid"))
+                })?
+        };
+        if !ids.contains(&found.0) {
+            ids.push(found.0);
+        }
+    }
+    Ok(ids)
+}
+
+/// `timetracking`: `{"originalEstimate": "1d", "remainingEstimate": "4h"}`. Setting only the
+/// original estimate on an issue without a remaining estimate sets both, as in Jira.
+fn set_time_tracking(target: &mut IssueFields, value: &Value) -> ApiResult<()> {
+    let estimate = |key: &str| -> ApiResult<Option<Option<i64>>> {
+        match value.get(key) {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(None)),
+            Some(Value::String(text)) if text.trim().is_empty() => Ok(Some(None)),
+            Some(Value::String(text)) => time::parse_duration(text).map(|s| Some(Some(s))).ok_or_else(|| {
+                ApiError::field(
+                    "timetracking",
+                    format!("Invalid time duration entered: '{text}'. Use a format such as '2w 4d 6h 45m'."),
+                )
+            }),
+            Some(_) => Err(ApiError::field("timetracking", "Estimates must be strings such as '3h'.")),
+        }
+    };
+    let original = estimate("originalEstimate")?;
+    let remaining = estimate("remainingEstimate")?;
+    if let Some(original) = original {
+        target.original_estimate = original;
+        if remaining.is_none() && target.remaining_estimate.is_none() {
+            target.remaining_estimate = original;
+        }
+    }
+    if let Some(remaining) = remaining {
+        target.remaining_estimate = remaining;
     }
     Ok(())
 }
@@ -268,13 +417,26 @@ fn labels(field: &str, value: &Value) -> ApiResult<Vec<String>> {
 }
 
 /// `add` and `remove` operations on list fields.
-fn apply_list_operation(
+async fn apply_list_operation(
+    db: &SqlitePool,
     custom: &CustomCatalog,
+    project: &Project,
     target: &mut IssueFields,
     name: &str,
     add: bool,
     value: &Value,
 ) -> ApiResult<()> {
+    if let Some(part) = Part::from_name(name) {
+        let ids = part_ids(db, project.id, part, &Value::Array(vec![value.clone()])).await?;
+        let list = part.list_mut(target);
+        for id in ids {
+            list.retain(|existing| *existing != id);
+            if add {
+                list.push(id);
+            }
+        }
+        return Ok(());
+    }
     if name == "labels" {
         let label = value
             .as_str()
@@ -645,6 +807,58 @@ pub async fn diff(
             to_string: to,
         });
     }
+    // List fields record one entry per added or removed value.
+    for part in [Part::Components, Part::FixVersions, Part::AffectsVersions] {
+        let (field_id, field_name) = part.history_names();
+        let (old, new) = (part.list(before), part.list(after));
+        for (id, added) in old
+            .iter()
+            .filter(|id| !new.contains(id))
+            .map(|id| (*id, false))
+            .chain(
+                new.iter()
+                    .filter(|id| !old.contains(id))
+                    .map(|id| (*id, true)),
+            )
+        {
+            let name = part_name(&ctx.state.db, part, id).await?;
+            let (value, text) = (Some(id.to_string()), Some(name));
+            items.push(ChangeItem {
+                field: field_name.into(),
+                field_id: field_id.into(),
+                field_type: "jira".into(),
+                from_value: if added { None } else { value.clone() },
+                from_string: if added { None } else { text.clone() },
+                to_value: if added { value } else { None },
+                to_string: if added { text } else { None },
+            });
+        }
+    }
+    for (field, from, to) in [
+        (
+            "timeoriginalestimate",
+            before.original_estimate,
+            after.original_estimate,
+        ),
+        (
+            "timeestimate",
+            before.remaining_estimate,
+            after.remaining_estimate,
+        ),
+    ] {
+        if from != to {
+            let seconds = |v: Option<i64>| v.map(|s| s.to_string());
+            items.push(ChangeItem {
+                field: field.into(),
+                field_id: field.into(),
+                field_type: "jira".into(),
+                from_value: seconds(from),
+                from_string: seconds(from),
+                to_value: seconds(to),
+                to_string: seconds(to),
+            });
+        }
+    }
     for (field_id, new_value) in &after.custom_values {
         let old_value = before_custom
             .iter()
@@ -688,4 +902,12 @@ async fn issue_key(ctx: &Ctx, id: Option<i64>) -> ApiResult<Option<String>> {
         return Ok(None);
     };
     Ok(issues::by_id(&ctx.state.db, id).await?.map(|i| i.key))
+}
+
+async fn part_name(db: &SqlitePool, part: Part, id: i64) -> ApiResult<String> {
+    Ok(match part {
+        Part::Components => components::by_id(db, id).await?.map(|c| c.name),
+        Part::FixVersions | Part::AffectsVersions => versions::by_id(db, id).await?.map(|v| v.name),
+    }
+    .unwrap_or_default())
 }

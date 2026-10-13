@@ -20,6 +20,21 @@ pub fn format(ms: i64) -> String {
     zoned(ms).strftime("%Y-%m-%dT%H:%M:%S%.3f%z").to_string()
 }
 
+/// Parses a Jira date-time such as `2026-10-13T09:30:00.000+0000` (also with `Z` or `+00:00`).
+pub fn parse_jira_datetime(text: &str) -> Option<i64> {
+    let text = text.trim();
+    [
+        "%Y-%m-%dT%H:%M:%S%.f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S%.f%:z",
+        "%Y-%m-%dT%H:%M:%S%:z",
+    ]
+    .iter()
+    .find_map(|pattern| Timestamp::strptime(pattern, text).ok())
+    .or_else(|| text.parse::<Timestamp>().ok())
+    .map(|ts| ts.as_millisecond())
+}
+
 /// Parses a Jira date (`2026-10-13`) used by fields such as `duedate`.
 pub fn parse_date(text: &str) -> Option<Date> {
     Date::strptime("%Y-%m-%d", text).ok()
@@ -112,6 +127,57 @@ pub fn end_of(unit: &str, now: i64, offset: i64) -> Option<i64> {
     start_of(unit, now, offset + 1).map(|next| next - 1)
 }
 
+/// Seconds in Jira's time tracking units: a day is 8 working hours, a week is 5 working days.
+const MINUTE: i64 = 60;
+const HOUR: i64 = 60 * MINUTE;
+const DAY: i64 = 8 * HOUR;
+const WEEK: i64 = 5 * DAY;
+
+/// Parses a time tracking duration such as `1w 2d 3h 30m`, `90m`, or `1.5h`, into seconds.
+/// A bare number means minutes, as in Jira.
+pub fn parse_duration(text: &str) -> Option<i64> {
+    let mut total = 0.0;
+    let mut any = false;
+    for part in text.split_whitespace() {
+        let (amount, unit) = match part.char_indices().find(|(_, c)| c.is_ascii_alphabetic()) {
+            Some((i, _)) => (&part[..i], &part[i..]),
+            None => (part, "m"),
+        };
+        let amount: f64 = amount.parse().ok()?;
+        if amount < 0.0 {
+            return None;
+        }
+        let unit_seconds = match unit {
+            "w" => WEEK,
+            "d" => DAY,
+            "h" => HOUR,
+            "m" => MINUTE,
+            _ => return None,
+        };
+        total += amount * unit_seconds as f64;
+        any = true;
+    }
+    any.then_some(total.round() as i64)
+}
+
+/// Formats seconds like Jira: `1w 2d 3h 30m`, leaving out zero units. Zero is `0m`.
+pub fn format_duration(seconds: i64) -> String {
+    let mut rest = seconds.max(0);
+    let mut parts = Vec::new();
+    for (unit, size) in [("w", WEEK), ("d", DAY), ("h", HOUR), ("m", MINUTE)] {
+        let count = rest / size;
+        rest %= size;
+        if count > 0 {
+            parts.push(format!("{count}{unit}"));
+        }
+    }
+    if parts.is_empty() {
+        "0m".into()
+    } else {
+        parts.join(" ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +227,32 @@ mod tests {
         assert_eq!(day(start_of("week", NOW, 0).unwrap()), "2026-10-11");
         assert_eq!(day(start_of("month", NOW, -1).unwrap()), "2026-09-01");
         assert_eq!(day(start_of("year", NOW, 0).unwrap()), "2026-01-01");
+    }
+
+    #[test]
+    fn durations_use_working_time() {
+        assert_eq!(
+            parse_duration("1w 2d 3h 30m"),
+            Some(WEEK + 2 * DAY + 3 * HOUR + 30 * MINUTE)
+        );
+        assert_eq!(parse_duration("90"), Some(90 * MINUTE));
+        assert_eq!(parse_duration("1.5h"), Some(90 * MINUTE));
+        assert_eq!(parse_duration("2x"), None);
+        assert_eq!(parse_duration(""), None);
+        assert_eq!(format_duration(WEEK + DAY + 30 * MINUTE), "1w 1d 30m");
+        assert_eq!(format_duration(9 * HOUR), "1d 1h");
+        assert_eq!(format_duration(0), "0m");
+    }
+
+    #[test]
+    fn parses_jira_datetimes() {
+        let expected = Some(1_791_883_800_000);
+        assert_eq!(
+            parse_jira_datetime("2026-10-13T09:30:00.000+0000"),
+            expected
+        );
+        assert_eq!(parse_jira_datetime("2026-10-13T09:30:00+00:00"), expected);
+        assert_eq!(parse_jira_datetime("2026-10-13T09:30:00Z"), expected);
+        assert_eq!(parse_jira_datetime("13/Oct/26"), None);
     }
 }

@@ -18,7 +18,7 @@ use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
 use crate::jql::{self, Bind, SearchContext};
 use crate::store::users::{self, User};
-use crate::store::{issues, projects};
+use crate::store::{components, issues, links, projects, versions};
 use crate::time::now_ms;
 
 /// The most issues one page may hold.
@@ -42,11 +42,17 @@ pub async fn run_jql(
     let custom = CustomCatalog::load(db).await?;
     let all_projects = projects::list(db).await?;
     let all_users = users::all(db).await?;
+    let all_components = components::all(db).await?;
+    let all_versions = versions::all(db).await?;
+    let link_types = links::types(db).await?;
     let ctx = SearchContext {
         catalog: &catalog,
         custom: &custom,
         projects: &all_projects,
         users: &all_users,
+        components: &all_components,
+        versions: &all_versions,
+        link_types: &link_types,
         current_user: user.map(|u| u.id),
         now: now_ms(),
     };
@@ -174,7 +180,7 @@ async fn legacy(
     let (ids, total) = run_jql(&state.db, Some(user), &request.jql, start_at, max_results).await?;
     let expand = request.expand.items();
     let view = IssueView::new(&request.fields.items(), &expand);
-    let mut ctx = Ctx::new(state, version).await?;
+    let mut ctx = Ctx::new(state, version).await?.viewed_by(user.id);
     let issues = render_page(&mut ctx, &ids, &view, false).await?;
     let mut response = json!({
         "expand": "schema,names",
@@ -209,7 +215,7 @@ async fn enhanced(
     let expand = request.expand.items();
     let ids_only = fields.is_empty() || fields.iter().all(|f| f == "id");
     let view = IssueView::new(&fields, &expand);
-    let mut ctx = Ctx::new(state, version).await?;
+    let mut ctx = Ctx::new(state, version).await?.viewed_by(user.id);
     let issues = render_page(&mut ctx, &ids, &view, ids_only).await?;
     let next = start_at + ids.len() as i64;
     let mut response = json!({ "issues": issues, "isLast": next >= total });

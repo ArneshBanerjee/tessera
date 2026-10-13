@@ -22,6 +22,14 @@ struct Cli {
         global = true
     )]
     database: String,
+    /// Directory for attachments and other files.
+    #[arg(
+        long,
+        env = "TESSERA_DATA_DIR",
+        default_value = "tessera-data",
+        global = true
+    )]
+    data_dir: std::path::PathBuf,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -81,11 +89,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string();
             let listener = tokio::net::TcpListener::bind(addr).await?;
             tracing::info!("Tessera listening on {base_url}");
-            axum::serve(listener, app(AppState { db: pool, base_url }))
-                .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
-                .await?;
+            let data_dir = cli.data_dir;
+            axum::serve(
+                listener,
+                app(AppState {
+                    db: pool,
+                    base_url,
+                    data_dir,
+                }),
+            )
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await?;
         }
         Command::CreateUser {
             email,
