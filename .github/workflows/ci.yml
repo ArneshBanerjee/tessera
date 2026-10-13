@@ -32,3 +32,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
       - run: scripts/compat/run.sh
+
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk
+      - run: cargo clippy -p tessera-web --target wasm32-unknown-unknown -- -D warnings
+      - run: trunk build --release
+        working-directory: crates/tessera-web
+      # The server embeds the built app, so it must still build with it in place.
+      - run: cargo build -p tessera-server --release

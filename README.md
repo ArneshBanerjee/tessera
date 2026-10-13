@@ -4,7 +4,7 @@ An open-source, clean-room clone of the Atlassian suite, written in Rust.
 
 Tessera aims for 1:1 parity with Jira and Confluence: the same features, the same workflows, and the same REST APIs. Your existing scripts, clients, and integrations work after you change the server URL. Tessera runs as one binary on Linux, macOS, and Windows, and you host it yourself.
 
-> **Status: pre-alpha.** The Jira core API works. There is no web UI yet. Do not use it for real work yet.
+> **Status: pre-alpha.** The Jira API and a first web app work. Do not use it for real work yet.
 
 Tessera is not affiliated with or endorsed by Atlassian. Jira, Confluence, and Atlassian are trademarks of Atlassian.
 
@@ -39,9 +39,11 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 
 Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
+**Web app**: log in, your work, projects (create from scrum, kanban, or task tracking templates), the backlog (quick create, sprints, drag issues into sprints, start sprint), the board (drag cards to change status, complete sprint), the issue view (edit summary and description in Markdown, transitions, assignee, reporter, priority, labels, due date, story points, subtasks, issue links, attachments, comments, history, watch, delete), JQL search with saved filters and favourites, and quick search. The server serves the app from its own binary.
+
 ### Not yet built
 
-Web UI, sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, Confluence, and import of Atlassian backups.
+Sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, Confluence, and import of Atlassian backups.
 
 ## Compatibility
 
@@ -49,13 +51,17 @@ Web UI, sprint reports and burndown, quick filters, project roles and fine-grain
 
 ## Run it
 
+Build the web app first, so the server can include it. You need [Trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target.
+
 ```bash
+rustup target add wasm32-unknown-unknown
+(cd crates/tessera-web && trunk build --release)
 cargo build --release
 ./target/release/tessera create-user --email you@example.com --name "Your Name" --password change-me --admin
 ./target/release/tessera serve
 ```
 
-The server listens on `127.0.0.1:8080` and stores data in `tessera.db`.
+The server listens on `127.0.0.1:8080` and stores data in `tessera.db`. Open `http://127.0.0.1:8080` in a browser to use the web app. If you skip the web app build, the server still serves the API.
 
 | Setting | Flag | Variable | Default |
 | --- | --- | --- | --- |
@@ -80,13 +86,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 scripts/compat/run.sh
 ```
 
+To work on the web app, run the server on port 8080 and `trunk serve` in `crates/tessera-web`. Trunk sends API calls to the server.
+
 ## Layout
 
 | Crate | Purpose |
 | --- | --- |
 | `tessera-jql` | JQL lexer and parser |
-| `tessera-adf` | Atlassian Document Format types and plain-text conversion |
-| `tessera-server` | Storage (SQLite), the JQL to SQL compiler, and the REST API |
+| `tessera-adf` | Atlassian Document Format types, and conversion to and from plain text and Markdown |
+| `tessera-server` | Storage (SQLite), the JQL to SQL compiler, the REST API, and serving the web app |
+| `tessera-web` | The web app (Leptos, compiled to WebAssembly) |
 
 ## Clean-room rules
 
@@ -105,7 +114,7 @@ scripts/compat/run.sh
 | 2. Jira core API | Users, projects, issues, workflows, comments, custom fields, JQL search, history. **Done.** |
 | 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions. **Done.** Roles and permissions follow. |
 | 4. Boards | Saved filters, scrum and kanban boards, sprints, backlog, ranking, epics, and the Agile REST API. **Done.** |
-| 5. Web UI | Leptos (Rust compiled to WebAssembly) app, and a Tauri desktop app. |
+| 5. Web UI | Leptos (Rust compiled to WebAssembly) app. **First version done.** A Tauri desktop app follows. |
 | 6. Confluence core | Spaces, page tree, rich-text editor, comments, and core macros. |
 | 7. Migration | Import of Jira Cloud and Confluence backups. |
 | 8. Launch | Jira and Confluence together. Service Management, Trello-style boards, and Statuspage follow. |

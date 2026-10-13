@@ -1,0 +1,20 @@
+[package]
+name = "tessera-web"
+description = "The Tessera web app: a Leptos (Rust compiled to WebAssembly) client of the REST API."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tessera-adf.workspace = true
+leptos = { version = "0.8.22", features = ["csr"] }
+leptos_router = "0.8.17"
+gloo-net = { version = "0.7.0", features = ["http", "json"] }
+form_urlencoded.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+web-sys = { version = "0.3.106", features = ["DataTransfer", "DragEvent", "File", "FileList", "FormData", "HtmlElement", "HtmlInputElement", "KeyboardEvent", "Location", "Storage", "Window"] }
+wasm-bindgen = "0.2.129"
+js-sys = "0.3.106"

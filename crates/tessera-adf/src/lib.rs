@@ -6,6 +6,9 @@
 //!
 //! [`Node`] keeps every attribute it does not know about, so documents round-trip without loss.
 
+pub mod markdown;
+
+pub use markdown::{from_markdown, to_markdown};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 

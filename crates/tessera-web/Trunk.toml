@@ -1,0 +1,15 @@
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/"
+filehash = true
+
+# `trunk serve` forwards API calls to a local Tessera server.
+[[proxy]]
+backend = "http://127.0.0.1:8080/rest/"
+
+[[proxy]]
+backend = "http://127.0.0.1:8080/avatar/"
+
+[[proxy]]
+backend = "http://127.0.0.1:8080/icons/"

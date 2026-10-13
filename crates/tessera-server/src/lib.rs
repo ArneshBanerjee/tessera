@@ -9,6 +9,7 @@ pub mod error;
 pub mod jql;
 pub mod store;
 pub mod time;
+mod web;
 
 use std::path::PathBuf;
 
@@ -27,5 +28,5 @@ pub struct AppState {
 
 /// Builds the whole HTTP application.
 pub fn app(state: AppState) -> Router {
-    api::router().with_state(state)
+    api::router().fallback(web::fallback).with_state(state)
 }
