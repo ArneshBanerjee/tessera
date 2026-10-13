@@ -1,0 +1,27 @@
+//! The Tessera server.
+//!
+//! `main.rs` is a thin command-line wrapper. Integration tests build the app from this library.
+
+pub mod api;
+pub mod auth;
+pub mod db;
+pub mod error;
+pub mod jql;
+pub mod store;
+pub mod time;
+
+use axum::Router;
+use sqlx::SqlitePool;
+
+/// Shared state for every request.
+#[derive(Clone)]
+pub struct AppState {
+    pub db: SqlitePool,
+    /// The public URL clients use to reach this server, without a trailing slash.
+    pub base_url: String,
+}
+
+/// Builds the whole HTTP application.
+pub fn app(state: AppState) -> Router {
+    api::router().with_state(state)
+}
