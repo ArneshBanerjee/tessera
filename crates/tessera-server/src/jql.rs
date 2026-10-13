@@ -1244,7 +1244,8 @@ impl<'a> Compiler<'a> {
                 }
                 Atom::Function(function, _) => {
                     let states: &[&str] = match function.to_ascii_lowercase().as_str() {
-                        "opensprints" => &["active", "future"],
+                        // Started and not completed, per Jira: active sprints only.
+                        "opensprints" => &["active"],
                         "closedsprints" => &["closed"],
                         "futuresprints" => &["future"],
                         _ => return Err(function_not_supported(function, name)),

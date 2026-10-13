@@ -657,6 +657,11 @@ fn custom_value_text(custom: &CustomCatalog, field: &CustomField, stored: &str) 
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        // Whole numbers read "5", not "5.0", as in Jira's history.
+        ("number", Value::Number(n)) => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("{}", f as i64),
+            _ => n.to_string(),
+        },
         (_, Value::String(text)) => text.clone(),
         (_, other) => other.to_string(),
     }

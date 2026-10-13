@@ -189,7 +189,8 @@ async fn sprint_lifecycle() {
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert_eq!(app.jql("sprint in openSprints()").await.len(), 2);
+    // openSprints() means started and not completed, so a future sprint is not in it.
+    assert!(app.jql("sprint in openSprints()").await.is_empty());
     assert_eq!(app.jql("sprint in futureSprints()").await.len(), 2);
     assert_eq!(app.jql(r#"sprint = "Sprint 1""#).await.len(), 2);
 
@@ -207,6 +208,7 @@ async fn sprint_lifecycle() {
         .await;
     assert_eq!(status, StatusCode::OK, "{started}");
     assert_eq!(started["state"], "active");
+    assert_eq!(app.jql("sprint in openSprints()").await.len(), 2);
 
     // Only one active sprint per board.
     let (_, second) = app

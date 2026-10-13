@@ -370,11 +370,12 @@ pub async fn backlog(
     Query(params): Query<IssueQuery>,
 ) -> ApiResult<Json<Value>> {
     let board = find_board(&state, &id).await?;
-    let not_in_open_sprint = Clause::Not(Box::new(clause(
-        "sprint",
-        Operator::In,
-        function("openSprints", &[]),
-    )));
+    // In no active (openSprints) or future sprint.
+    let not_in_open_sprint = Clause::Not(Box::new(Clause::Or(vec![
+        clause("sprint", Operator::In, function("openSprints", &[])),
+        clause("sprint", Operator::In, function("futureSprints", &[])),
+    ])));
+
     let done = done_statuses(&state.db, &board).await?;
     let incomplete = (!done.is_empty()).then(|| {
         clause(
