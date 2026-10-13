@@ -8,42 +8,19 @@ use serde_json::{Value, json};
 use super::Params;
 use super::error::{WikiError, WikiResult};
 use super::render::{self, Expand, WikiCtx};
+use super::service::{self, NewPage, Parent, Save, check_not_below, find_content, find_current};
 use super::spaces::find_space;
 use crate::AppState;
 use crate::api::extract::Json;
 use crate::auth::CurrentUser;
-use crate::store::content::{self, Content, Edit, ListFilter, NewContent};
+use crate::store::content::{self, Content, ListFilter};
 use crate::store::labels;
-use crate::time::{self, now_ms};
+use crate::time;
+
+pub use service::content_id;
 
 /// What create and update responses include, as Confluence's do.
 const WRITE_EXPAND: &str = "space,history,version,ancestors,container,body.storage";
-
-/// An id given as a JSON string or number.
-pub fn content_id(value: &Value) -> Option<String> {
-    value
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| value.as_i64().map(|id| id.to_string()))
-}
-
-/// Content by id, in any status.
-pub async fn find_content(state: &AppState, id: &str) -> WikiResult<Content> {
-    let found = match id.parse::<i64>() {
-        Ok(number) => content::by_id(&state.db, number).await?,
-        Err(_) => None,
-    };
-    found.ok_or_else(|| WikiError::content_not_found(id))
-}
-
-/// Content that is current (not trashed or a draft), as most reads require.
-async fn find_current(state: &AppState, id: &str) -> WikiResult<Content> {
-    let found = find_content(state, id).await?;
-    if found.status != "current" {
-        return Err(WikiError::content_not_found(id));
-    }
-    Ok(found)
-}
 
 #[derive(Deserialize)]
 pub struct ContentRequest {
@@ -63,73 +40,35 @@ pub struct ContentRequest {
     version: Value,
 }
 
-/// The storage-format body of a request, if it has one.
+/// The storage-format body of a v1 request, `{"storage": {"value": ...}}`, if it has one.
 fn request_body(body: &Value) -> WikiResult<Option<String>> {
-    let Some(object) = body.as_object() else {
-        return Ok(None);
-    };
-    for representation in ["storage", "editor"] {
-        if let Some(value) = object.get(representation) {
-            return Ok(Some(
-                value["value"].as_str().unwrap_or_default().to_string(),
-            ));
+    match body
+        .as_object()
+        .and_then(|o| o.iter().find(|(k, _)| !k.starts_with('_')))
+    {
+        Some((representation, value)) => {
+            service::body_from(representation, &value["value"]).map(Some)
         }
-    }
-    match object.keys().next() {
-        Some(other) => Err(WikiError::bad_request(format!(
-            "Unsupported body representation: {other}. Use storage."
-        ))),
         None => Ok(None),
     }
 }
 
-/// The parent named by the last entry of `ancestors`, which must be a page in the space.
-async fn parent_page(
-    state: &AppState,
-    ancestors: &[Value],
-    space_id: i64,
-) -> WikiResult<Option<Content>> {
-    let Some(last) = ancestors.last() else {
-        return Ok(None);
-    };
-    let id = content_id(&last["id"])
-        .ok_or_else(|| WikiError::bad_request("Ancestors must have an id"))?;
-    let parent = find_current(state, &id).await?;
-    if parent.content_type != "page" || parent.space_id != space_id {
-        return Err(WikiError::bad_request(format!(
-            "The parent page {id} must be a page in the same space"
-        )));
+/// The id of the last entry of `ancestors`: a page's parent, or the comment a reply answers.
+fn last_ancestor(ancestors: &[Value]) -> WikiResult<Option<String>> {
+    match ancestors.last() {
+        Some(last) => content_id(&last["id"])
+            .map(Some)
+            .ok_or_else(|| WikiError::bad_request("Ancestors must have an id")),
+        None => Ok(None),
     }
-    Ok(Some(parent))
 }
 
-async fn check_title(
-    state: &AppState,
-    space_id: i64,
-    content_type: &str,
-    title: &str,
-    except: Option<i64>,
-) -> WikiResult<()> {
-    if title.trim().is_empty() {
-        return Err(WikiError::bad_request("Content title cannot be empty"));
+/// The response's expansions: the client's, or Confluence's defaults for writes.
+fn write_expand(params: &Params) -> Expand {
+    match params.get("expand") {
+        Some(_) => params.expand(),
+        None => Expand::parse(Some(WRITE_EXPAND)),
     }
-    if title.chars().count() > 255 {
-        return Err(WikiError::bad_request(
-            "Title cannot be longer than 255 characters",
-        ));
-    }
-    if content_type == "page"
-        && content::title_taken(&state.db, space_id, content_type, title, except).await?
-    {
-        let key = crate::store::spaces::by_id(&state.db, space_id)
-            .await?
-            .map(|s| s.key)
-            .unwrap_or_default();
-        return Err(WikiError::bad_request(format!(
-            "A page with this title already exists: A page already exists with the title {title} in the space with key {key}"
-        )));
-    }
-    Ok(())
 }
 
 pub async fn create(
@@ -139,86 +78,38 @@ pub async fn create(
     Json(request): Json<ContentRequest>,
 ) -> WikiResult<Json<Value>> {
     let content_type = request.content_type.as_deref().unwrap_or("page");
-    let status = request.status.as_deref().unwrap_or("current");
-    if status != "current" && status != "draft" {
-        return Err(WikiError::bad_request(format!(
-            "Unsupported status: {status}"
-        )));
-    }
     let body = request_body(&request.body)?.unwrap_or_default();
-    let now = now_ms();
     let created = match content_type {
         "page" | "blogpost" => {
             let key = request.space["key"]
                 .as_str()
                 .ok_or_else(|| WikiError::bad_request("Space key is required"))?;
             let space = find_space(&state, key).await?;
-            let title = request.title.unwrap_or_default();
-            if status == "current" {
-                check_title(&state, space.id, content_type, &title, None).await?;
-            }
-            let parent = if content_type == "page" {
-                parent_page(&state, &request.ancestors, space.id).await?
-            } else {
-                None
+            let parent = match last_ancestor(&request.ancestors)? {
+                Some(id) if content_type == "page" => {
+                    Some(service::parent_page(&state, &id, space.id).await?)
+                }
+                _ => None,
             };
-            content::create(
-                &state.db,
-                &NewContent {
-                    content_type,
-                    status,
-                    space_id: space.id,
-                    parent_id: parent.map(|p| p.id),
-                    container_id: None,
-                    title: &title,
-                    body: &body,
-                    author_id: user.id,
-                    now,
-                },
-            )
-            .await?
+            let page = NewPage {
+                kind: content_type,
+                status: request.status.as_deref().unwrap_or("current"),
+                space: &space,
+                title: request.title.as_deref().unwrap_or_default(),
+                parent: parent.as_ref(),
+                body: &body,
+            };
+            service::create_page(&state, &user, page).await?
         }
         "comment" => {
             let container_id = content_id(&request.container["id"])
                 .ok_or_else(|| WikiError::bad_request("A comment needs a container"))?;
             let container = find_current(&state, &container_id).await?;
-            if container.content_type == "comment" {
-                return Err(WikiError::bad_request(
-                    "A comment's container must be a page or blog post",
-                ));
-            }
-            // A reply names the comment it answers as its last ancestor.
-            let reply_to = match request.ancestors.last().and_then(|a| content_id(&a["id"])) {
-                Some(id) => {
-                    let parent = find_current(&state, &id).await?;
-                    if parent.content_type != "comment" || parent.container_id != Some(container.id)
-                    {
-                        return Err(WikiError::bad_request(
-                            "A reply must answer a comment on the same content",
-                        ));
-                    }
-                    Some(parent.id)
-                }
+            let reply_to = match last_ancestor(&request.ancestors)? {
+                Some(id) => Some(find_current(&state, &id).await?),
                 None => None,
             };
-            if body.trim().is_empty() {
-                return Err(WikiError::bad_request("Comment body cannot be empty"));
-            }
-            content::create(
-                &state.db,
-                &NewContent {
-                    content_type: "comment",
-                    status: "current",
-                    space_id: container.space_id,
-                    parent_id: reply_to,
-                    container_id: Some(container.id),
-                    title: &format!("Re: {}", container.title),
-                    body: &body,
-                    author_id: user.id,
-                    now,
-                },
-            )
-            .await?
+            service::create_comment(&state, &user, &container, reply_to.as_ref(), &body).await?
         }
         other => {
             return Err(WikiError::bad_request(format!(
@@ -226,13 +117,11 @@ pub async fn create(
             )));
         }
     };
-    let expand = params.expand();
-    let expand = if params.get("expand").is_some() {
-        expand
-    } else {
-        Expand::parse(Some(WRITE_EXPAND))
-    };
-    Ok(Json(WikiCtx::new(&state).content(&created, &expand).await?))
+    Ok(Json(
+        WikiCtx::new(&state)
+            .content(&created, &write_expand(&params))
+            .await?,
+    ))
 }
 
 /// `GET /content`: pages or blog posts, filtered by space, title, status, and posting day.
@@ -330,12 +219,6 @@ pub async fn update(
     let number = request.version["number"]
         .as_i64()
         .ok_or_else(|| WikiError::bad_request("Version number is required to update content"))?;
-    if number != found.version + 1 {
-        return Err(WikiError::conflict(format!(
-            "Version must be incremented on update. Current version is: {}",
-            found.version
-        )));
-    }
     if let Some(kind) = &request.content_type
         && *kind != found.content_type
     {
@@ -344,71 +227,27 @@ pub async fn update(
             found.content_type
         )));
     }
-    let status = request.status.clone().unwrap_or_else(|| "current".into());
-    if status != "current" && status != "draft" {
-        return Err(WikiError::bad_request(format!(
-            "Unsupported status: {status}"
-        )));
-    }
-    let title = request.title.clone().unwrap_or_else(|| found.title.clone());
-    if found.content_type != "comment" {
-        check_title(
-            &state,
-            found.space_id,
-            &found.content_type,
-            &title,
-            Some(found.id),
-        )
-        .await?;
-    }
-    let body = request_body(&request.body)?.unwrap_or_else(|| found.body.clone());
-    let parent_id = if found.content_type == "page" && !request.ancestors.is_empty() {
-        let parent = parent_page(&state, &request.ancestors, found.space_id).await?;
-        if let Some(parent) = &parent {
-            check_not_below(&state, &found, parent).await?;
-        }
-        parent.map(|p| p.id)
-    } else if found.status == "trashed" {
-        // Restored pages return to the top of the space, as their old parent may be gone.
-        None
-    } else {
-        found.parent_id
+    let parent = match last_ancestor(&request.ancestors)? {
+        Some(id) if found.content_type == "page" => Parent::Move(Some(
+            service::parent_page(&state, &id, found.space_id).await?,
+        )),
+        _ => Parent::Keep,
     };
-    let updated = content::update(
-        &state.db,
-        &found,
-        &Edit {
-            title: &title,
-            body: &body,
-            status: &status,
-            parent_id,
-            author_id: user.id,
-            now: now_ms(),
-            message: request.version["message"].as_str().unwrap_or_default(),
-            minor_edit: request.version["minorEdit"].as_bool().unwrap_or(false),
-        },
-    )
-    .await?;
-    let expand = match params.get("expand") {
-        Some(_) => params.expand(),
-        None => Expand::parse(Some(WRITE_EXPAND)),
+    let save = Save {
+        number,
+        title: request.title.as_deref(),
+        body: request_body(&request.body)?,
+        status: request.status.as_deref().unwrap_or("current"),
+        parent,
+        message: request.version["message"].as_str().unwrap_or_default(),
+        minor_edit: request.version["minorEdit"].as_bool().unwrap_or(false),
     };
-    Ok(Json(WikiCtx::new(&state).content(&updated, &expand).await?))
-}
-
-/// Refuses to move a page below itself.
-async fn check_not_below(state: &AppState, page: &Content, new_parent: &Content) -> WikiResult<()> {
-    if new_parent.id == page.id {
-        return Err(WikiError::bad_request("A page cannot be its own parent"));
-    }
-    for ancestor in content::ancestors(&state.db, new_parent).await? {
-        if ancestor.id == page.id {
-            return Err(WikiError::bad_request(
-                "A page cannot move below one of its own children",
-            ));
-        }
-    }
-    Ok(())
+    let updated = service::save(&state, &user, &found, save).await?;
+    Ok(Json(
+        WikiCtx::new(&state)
+            .content(&updated, &write_expand(&params))
+            .await?,
+    ))
 }
 
 /// `DELETE /content/{id}`: moves current content to the trash. With `status=trashed`, purges
@@ -420,14 +259,11 @@ pub async fn delete(
     params: Params,
 ) -> WikiResult<StatusCode> {
     let found = find_content(&state, &id).await?;
-    match (found.status.as_str(), params.get("status")) {
-        ("current", _) if found.content_type == "comment" => {
-            content::purge(&state.db, found.id).await?
-        }
-        ("current", _) => content::trash(&state.db, &found, now_ms()).await?,
-        ("trashed", Some("trashed")) | ("draft", _) => content::purge(&state.db, found.id).await?,
-        _ => return Err(WikiError::content_not_found(&id)),
+    // Trashed content is invisible unless the client names its status.
+    if found.status == "trashed" && params.get("status") != Some("trashed") {
+        return Err(WikiError::content_not_found(&id));
     }
+    service::remove(&state, &found, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -586,36 +422,16 @@ pub async fn restore_version(
         .await?
         .ok_or_else(|| WikiError::not_found(format!("No version {number} of content {id}")))?;
     let restore_title = request["params"]["restoreTitle"].as_bool().unwrap_or(false);
-    let title = if restore_title {
-        old.title.clone()
-    } else {
-        found.title.clone()
+    let save = Save {
+        number: found.version + 1,
+        title: restore_title.then_some(old.title.as_str()),
+        body: Some(old.body.clone()),
+        status: "current",
+        parent: Parent::Keep,
+        message: request["params"]["message"].as_str().unwrap_or_default(),
+        minor_edit: false,
     };
-    if found.content_type != "comment" {
-        check_title(
-            &state,
-            found.space_id,
-            &found.content_type,
-            &title,
-            Some(found.id),
-        )
-        .await?;
-    }
-    let updated = content::update(
-        &state.db,
-        &found,
-        &Edit {
-            title: &title,
-            body: &old.body,
-            status: "current",
-            parent_id: found.parent_id,
-            author_id: user.id,
-            now: now_ms(),
-            message: request["params"]["message"].as_str().unwrap_or_default(),
-            minor_edit: false,
-        },
-    )
-    .await?;
+    let updated = service::save(&state, &user, &found, save).await?;
     let latest = content::version(&state.db, updated.id, updated.version)
         .await?
         .expect("the new version exists");

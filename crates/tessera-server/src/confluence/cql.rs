@@ -3,7 +3,7 @@
 //! CQL has JQL's grammar, so the JQL parser reads it; this module gives the fields their
 //! Confluence meaning. User input reaches SQL only through bound values.
 //!
-//! Supported fields: `type`, `space` (and `space.key`, `space.title`, `space.type`), `title`,
+//! Supported fields: `type`, `space` (and `space.key`, `space.id`, `space.title`, `space.type`), `title`,
 //! `text`, `id`, `content`, `ancestor`, `parent`, `container`, `label`, `creator`,
 //! `contributor`, `created`, and `lastmodified`. Functions: `currentUser()`, `now()`, and
 //! `startOf…`/`endOf…` for days, weeks, months, and years, with offsets such as `"-1w"`.
@@ -173,6 +173,7 @@ impl Compiler<'_> {
             "space" | "space.key" => {
                 self.text_in("s.key COLLATE NOCASE", op, operand, str::to_string)
             }
+            "space.id" => self.ids("s.id", op, operand),
             "space.type" => self.text_in("s.type", op, operand, |v| v.to_lowercase()),
             "space.title" => self.text_field("s.name", op, operand),
             "title" => self.text_field("c.title", op, operand),
@@ -197,6 +198,7 @@ impl Compiler<'_> {
             "space" | "space.key" => {
                 self.text_in("s.key COLLATE NOCASE", op, operand, str::to_string)
             }
+            "space.id" => self.ids("s.id", op, operand),
             "space.type" => self.text_in("s.type", op, operand, |v| v.to_lowercase()),
             "title" | "space.title" => self.text_field("s.name", op, operand),
             "text" => {
@@ -541,5 +543,6 @@ mod tests {
     fn date_functions() {
         compile_ok("created > now(\"-4w\") and lastmodified < startOfDay()");
         compile_ok("created = 2026-10-01");
+        compile_ok("space.id = \"98304\" and text ~ \"setup\"");
     }
 }

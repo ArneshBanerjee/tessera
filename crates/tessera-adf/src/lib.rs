@@ -6,6 +6,8 @@
 //!
 //! [`Node`] keeps every attribute it does not know about, so documents round-trip without loss.
 
+#[cfg(feature = "html")]
+pub mod html;
 pub mod markdown;
 
 pub use markdown::{from_markdown, to_markdown};

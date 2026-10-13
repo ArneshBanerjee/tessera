@@ -6,15 +6,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::Params;
-use super::content::{content_id, find_content};
 use super::error::{WikiError, WikiResult};
 use super::render::{Expand, WikiCtx};
+use super::service::{self, content_id, find_content};
 use crate::AppState;
 use crate::api::extract::Json;
 use crate::auth::CurrentUser;
-use crate::store::content::{self, NewContent};
-use crate::store::spaces::{self, NewSpace, Space, SpaceFilter};
-use crate::time::now_ms;
+use crate::store::content;
+use crate::store::spaces::{self, Space, SpaceFilter};
 
 pub async fn find_space(state: &AppState, key: &str) -> WikiResult<Space> {
     spaces::by_key(&state.db, key)
@@ -77,69 +76,21 @@ fn description_text(description: &Value) -> Option<String> {
     description["plain"]["value"].as_str().map(str::to_string)
 }
 
-fn valid_key(key: &str) -> bool {
-    !key.is_empty() && key.len() <= 255 && key.chars().all(|c| c.is_ascii_alphanumeric())
-}
-
 /// Creates a space with a home page, as Confluence does.
 pub async fn create(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Json(request): Json<SpaceRequest>,
 ) -> WikiResult<Json<Value>> {
-    let key = request.key.unwrap_or_default();
-    let name = request.name.unwrap_or_default();
-    if !valid_key(&key) {
-        return Err(WikiError::bad_request(
-            "Space key must only contain alphanumeric characters (a-z, 0-9)",
-        ));
-    }
-    if name.trim().is_empty() {
-        return Err(WikiError::bad_request("Space name cannot be empty"));
-    }
-    if spaces::by_key(&state.db, &key).await?.is_some() {
-        return Err(WikiError::bad_request(format!(
-            "A space already exists with key {key}"
-        )));
-    }
-    let now = now_ms();
-    let space = spaces::create(
-        &state.db,
-        &NewSpace {
-            key: &key,
-            name: &name,
-            description: &description_text(&request.description).unwrap_or_default(),
-            space_type: request.space_type.as_deref().unwrap_or("global"),
-            creator_id: user.id,
-            now,
-        },
+    let space = service::create_space(
+        &state,
+        &user,
+        request.key.as_deref().unwrap_or_default(),
+        request.name.as_deref().unwrap_or_default(),
+        &description_text(&request.description).unwrap_or_default(),
+        request.space_type.as_deref().unwrap_or("global"),
     )
     .await?;
-    let home = content::create(
-        &state.db,
-        &NewContent {
-            content_type: "page",
-            status: "current",
-            space_id: space.id,
-            parent_id: None,
-            container_id: None,
-            title: &format!("{name} Home"),
-            body: "",
-            author_id: user.id,
-            now,
-        },
-    )
-    .await?;
-    spaces::update(
-        &state.db,
-        space.id,
-        &space.name,
-        &space.description,
-        &space.status,
-        Some(home.id),
-    )
-    .await?;
-    let space = find_space(&state, &key).await?;
     Ok(Json(
         WikiCtx::new(&state)
             .space(&space, &Expand::default())

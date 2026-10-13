@@ -1,13 +1,16 @@
 //! The Confluence REST API, served under `/wiki` as Confluence Cloud does.
 //!
 //! - `/wiki/rest/api`: the v1 API (spaces, content, children, history, labels, CQL search).
+//! - `/wiki/api/v2`: the v2 API (spaces, pages, blog posts, footer comments, versions, labels).
 
 mod content;
 pub mod cql;
 pub mod error;
 pub mod render;
 mod search;
+pub mod service;
 mod spaces;
+mod v2;
 
 use axum::Router;
 use axum::extract::{FromRequestParts, State};
@@ -23,7 +26,9 @@ use error::{WikiError, WikiResult};
 use render::WikiCtx;
 
 pub fn router() -> Router<AppState> {
-    Router::new().nest("/wiki/rest/api", v1())
+    Router::new()
+        .nest("/wiki/rest/api", v1())
+        .nest("/wiki/api/v2", v2::router())
 }
 
 fn v1() -> Router<AppState> {
@@ -82,6 +87,10 @@ fn v1() -> Router<AppState> {
 pub struct Params(Vec<(String, String)>);
 
 impl Params {
+    pub fn pairs(&self) -> &[(String, String)] {
+        &self.0
+    }
+
     pub fn get(&self, key: &str) -> Option<&str> {
         self.0
             .iter()

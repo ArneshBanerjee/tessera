@@ -4,7 +4,7 @@ An open-source, clean-room clone of the Atlassian suite, written in Rust.
 
 Tessera aims for 1:1 parity with Jira and Confluence: the same features, the same workflows, and the same REST APIs. Your existing scripts, clients, and integrations work after you change the server URL. Tessera runs as one binary on Linux, macOS, and Windows, and you host it yourself.
 
-> **Status: pre-alpha.** The Jira API, a first web app, and the Confluence v1 API work. Do not use it for real work yet.
+> **Status: pre-alpha.** The Jira API, a first web app, and the Confluence v1 and v2 APIs work. Do not use it for real work yet.
 
 Tessera is not affiliated with or endorsed by Atlassian. Jira, Confluence, and Atlassian are trademarks of Atlassian.
 
@@ -43,15 +43,17 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 **Confluence** (`/wiki/rest/api`, the v1 API): spaces (with home pages), pages, blog posts, and comments with replies. Every version is kept: updates must name the next version number (409 otherwise, as in Confluence), old versions can be read and restored. The page tree: children, descendants, ancestors, and moving pages before, after, or under others. Trash and purge, labels, history, and content body conversion. Bodies use the storage format; the `view` format is sanitized HTML. Errors use Confluence's format.
 
-**CQL** reuses the JQL parser: `type`, `space`, `title`, `text`, `id`, `ancestor`, `parent`, `container`, `label`, `creator`, `contributor`, `created`, and `lastmodified`, with `~`, `IN`, comparisons, `currentUser()`, `now("-4w")`, `startOfDay()` and the other date functions, and `ORDER BY`. `/content/search` returns content; `/search` returns search results, including spaces for `type = space`.
+**Confluence v2** (`/wiki/api/v2`): spaces, pages, blog posts, footer comments with replies, versions, labels, children, descendants, and ancestors, with string ids, `body-format`, sorting, cursor paging, and v2 errors. Bodies can be read and written as storage or as ADF (`atlas_doc_format`); Tessera converts between them, macros included (code, panels, expand, status, tasks, mentions, emoji).
+
+**CQL** reuses the JQL parser: `type`, `space` (and `space.id`), `title`, `text`, `id`, `ancestor`, `parent`, `container`, `label`, `creator`, `contributor`, `created`, and `lastmodified`, with `~`, `IN`, comparisons, `currentUser()`, `now("-4w")`, `startOfDay()` and the other date functions, and `ORDER BY`. `/content/search` returns content; `/search` returns search results, including spaces for `type = space`.
 
 ### Not yet built
 
-Sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, the Confluence v2 API, Confluence attachments and macros, the Confluence web app, and import of Atlassian backups.
+Sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, Confluence attachments, inline comments, and page restrictions, the Confluence web app, and import of Atlassian backups.
 
 ## Compatibility
 
-`scripts/compat/run.sh` starts a throwaway server and drives it with unchanged clients. The official Python [`jira`](https://pypi.org/project/jira/) client covers projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, components, versions, watchers, links, worklogs, attachments, saved filters, boards, sprints, ranking, the backlog, and deletion. The Confluence client from [`atlassian-python-api`](https://pypi.org/project/atlassian-python-api/) covers spaces, pages, updates, history, the page tree, labels, comments, CQL, and the trash. CI runs both on every push.
+`scripts/compat/run.sh` starts a throwaway server and drives it with unchanged clients. The official Python [`jira`](https://pypi.org/project/jira/) client covers projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, components, versions, watchers, links, worklogs, attachments, saved filters, boards, sprints, ranking, the backlog, and deletion. The classic Confluence client from [`atlassian-python-api`](https://pypi.org/project/atlassian-python-api/) 3.x covers spaces, pages, updates, history, the page tree, labels, comments, CQL, and the trash over v1, and its 5.x Cloud client covers spaces, pages, bodies, children, footer comments, versions, and deletion over v2. CI runs all three on every push.
 
 ## Run it
 
@@ -97,7 +99,7 @@ To work on the web app, run the server on port 8080 and `trunk serve` in `crates
 | Crate | Purpose |
 | --- | --- |
 | `tessera-jql` | JQL lexer and parser |
-| `tessera-adf` | Atlassian Document Format types, and conversion to and from plain text and Markdown |
+| `tessera-adf` | Atlassian Document Format types, and conversion to and from plain text, Markdown, and Confluence's storage format |
 | `tessera-server` | Storage (SQLite), the JQL to SQL compiler, the REST API, and serving the web app |
 | `tessera-web` | The web app (Leptos, compiled to WebAssembly) |
 
@@ -119,6 +121,6 @@ To work on the web app, run the server on port 8080 and `trunk serve` in `crates
 | 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions. **Done.** Roles and permissions follow. |
 | 4. Boards | Saved filters, scrum and kanban boards, sprints, backlog, ranking, epics, and the Agile REST API. **Done.** |
 | 5. Web UI | Leptos (Rust compiled to WebAssembly) app. **First version done.** A Tauri desktop app follows. |
-| 6. Confluence core | Spaces, page tree, versions, comments, labels, CQL, and the v1 API. **In progress.** The v2 API, attachments, macros, and the editor follow. |
+| 6. Confluence core | Spaces, page tree, versions, comments, labels, CQL, and the v1 and v2 APIs. **In progress.** Attachments, the web app, and the editor follow. |
 | 7. Migration | Import of Jira Cloud and Confluence backups. |
 | 8. Launch | Jira and Confluence together. Service Management, Trello-style boards, and Statuspage follow. |

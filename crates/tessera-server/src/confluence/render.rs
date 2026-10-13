@@ -55,6 +55,7 @@ impl Expand {
 /// Body formats a client may ask for.
 pub const REPRESENTATIONS: &[&str] = &[
     "storage",
+    "atlas_doc_format",
     "view",
     "export_view",
     "styled_view",
@@ -435,25 +436,28 @@ impl<'a> WikiCtx<'a> {
         let mut out = Map::new();
         let mut expandable = Map::new();
         for representation in REPRESENTATIONS {
-            if expand.has(representation) {
-                let value = match *representation {
-                    "storage" | "editor" => content.body.clone(),
-                    _ => view_html(&content.body),
-                };
-                out.insert(
-                    (*representation).into(),
-                    json!({
-                        "value": value,
-                        "representation": representation,
-                        "embeddedContent": [],
-                        "_expandable": { "content": format!("/rest/api/content/{}", content.id) },
-                    }),
-                );
-            } else {
-                expandable.insert((*representation).into(), json!(""));
+            // Convert only the formats the client asked for.
+            let value = expand
+                .has(representation)
+                .then(|| super::service::body_as(representation, &content.body))
+                .flatten();
+            match value {
+                Some(value) => {
+                    out.insert(
+                        (*representation).into(),
+                        json!({
+                            "value": value,
+                            "representation": representation,
+                            "embeddedContent": [],
+                            "_expandable": { "content": format!("/rest/api/content/{}", content.id) },
+                        }),
+                    );
+                }
+                None => {
+                    expandable.insert((*representation).into(), json!(""));
+                }
             }
         }
-        expandable.insert("atlas_doc_format".into(), json!(""));
         expandable.insert("dynamic".into(), json!(""));
         out.insert("_expandable".into(), Value::Object(expandable));
         Value::Object(out)

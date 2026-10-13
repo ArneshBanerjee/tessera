@@ -24,7 +24,7 @@ jobs:
       - run: cargo test --workspace
 
   compat:
-    name: Jira client compatibility
+    name: Client compatibility
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
