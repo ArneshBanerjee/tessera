@@ -237,3 +237,81 @@ textarea.input { resize: vertical; }
 /* Leptos drops whitespace between tags, so author and time need a gap. */
 .comment strong + .muted, .history-entry strong + .muted { margin-left: 8px; }
 .inline-form .link-type { width: auto; flex: none; }
+
+/* Confluence: spaces */
+.space-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.space-card { display: flex; gap: 12px; align-items: flex-start; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+.space-card:hover { box-shadow: var(--shadow-raised); text-decoration: none; }
+.space-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.space-icon { flex: none; width: 36px; height: 36px; border-radius: 6px; display: grid; place-items: center; background: var(--primary); color: #fff; font-weight: 700; }
+.space-icon.small { width: 28px; height: 28px; font-size: 13px; }
+
+/* Confluence: space layout and page tree */
+.wiki-layout { display: grid; grid-template-columns: 272px 1fr; min-height: calc(100vh - 52px); }
+.wiki-sidebar { gap: 10px; overflow-y: auto; max-height: calc(100vh - 52px); position: sticky; top: 52px; }
+.tree-header { display: flex; justify-content: space-between; align-items: center; padding: 0 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+.page-tree { list-style: none; margin: 0; padding: 0 0 0 12px; }
+.wiki-sidebar > .page-tree { padding-left: 0; }
+.tree-row { display: flex; align-items: center; gap: 2px; border-radius: var(--radius); }
+.tree-row:hover { background: var(--surface-sunken); }
+.tree-row.current { background: var(--primary-soft); }
+.tree-row.current .tree-link { color: var(--primary-strong); font-weight: 600; }
+.tree-toggle { width: 20px; height: 24px; flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 11px; }
+.tree-link { flex: 1; min-width: 0; padding: 4px 4px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-link:hover { text-decoration: none; }
+
+/* Confluence: page */
+.wiki-page { max-width: 860px; margin: 0 auto; }
+.wiki-header { margin-bottom: 20px; }
+.wiki-title { font-size: 30px; margin: 8px 0 4px; }
+.byline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 4px 0 0; }
+.notice-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 14px; margin: 8px 0; background: #fff7e0; border: 1px solid #f2dca0; border-radius: var(--radius); }
+
+.wiki-body { font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.wiki-body h1, .wiki-body h2, .wiki-body h3, .wiki-body h4 { margin: 1.4em 0 0.5em; line-height: 1.3; }
+.wiki-body h1 { font-size: 24px; }
+.wiki-body h2 { font-size: 20px; }
+.wiki-body h3 { font-size: 17px; }
+.wiki-body p { margin: 0 0 0.75em; }
+.wiki-body ul, .wiki-body ol { padding-left: 1.5em; margin: 0 0 0.75em; }
+.wiki-body li > p { margin: 0; }
+.wiki-body pre { background: var(--surface-sunken); padding: 12px; border-radius: var(--radius); overflow-x: auto; }
+.wiki-body code { background: var(--surface-sunken); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+.wiki-body pre code { background: none; padding: 0; }
+.wiki-body blockquote { margin: 0 0 0.75em; padding-left: 14px; border-left: 3px solid var(--border); color: var(--muted); }
+.wiki-body table { border-collapse: collapse; margin: 0 0 1em; }
+.wiki-body th, .wiki-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+.wiki-body th { background: var(--surface-sunken); }
+.wiki-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
+.wiki-body .panel { padding: 10px 14px; border-radius: var(--radius); margin: 0 0 0.75em; border-left: 4px solid; }
+.wiki-body .panel > :last-child { margin-bottom: 0; }
+.wiki-body .panel-info { background: #e8f1fd; border-color: #4f86e0; }
+.wiki-body .panel-note { background: #f1ecfb; border-color: #8a63d2; }
+.wiki-body .panel-success { background: #e5f6ec; border-color: #2f9e5b; }
+.wiki-body .panel-warning { background: #fff5dc; border-color: #e0a106; }
+.wiki-body .panel-error { background: #fdebea; border-color: #d1453b; }
+.wiki-body details.expand { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; margin: 0 0 0.75em; }
+.wiki-body details.expand summary { cursor: pointer; font-weight: 500; }
+.wiki-body .status { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 11px; font-weight: 700; text-transform: uppercase; background: #e6e8ec; color: #3a4252; }
+.wiki-body .status-green { background: #dcf3e3; color: #1a6b34; }
+.wiki-body .status-red { background: #fde2e0; color: #a2271d; }
+.wiki-body .status-yellow { background: #fff1c2; color: #7a5a00; }
+.wiki-body .status-blue { background: #dde7fb; color: #1f478f; }
+.wiki-body .status-purple { background: #ece4fb; color: #5b3aa3; }
+.wiki-body .task-list { list-style: none; padding-left: 0.25em; }
+.wiki-body .task input { margin-right: 6px; }
+
+/* Confluence: labels and comments */
+.wiki-labels { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 28px 0 8px; }
+.label-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 8px; background: var(--surface-sunken); border-radius: 3px; font-size: 13px; }
+.chip-remove { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; }
+.label-form { display: inline-flex; }
+.small-input { width: 140px; padding: 3px 8px; }
+.wiki-comments { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 8px; }
+.comment-body { font-size: 14px; margin-top: 4px; }
+.comment-actions { display: flex; gap: 12px; }
+
+/* Confluence: editor */
+.title-input { font-size: 26px; font-weight: 600; border-color: transparent; padding: 6px 4px; margin-bottom: 10px; }
+.title-input:focus { border-color: var(--focus); }
+.wiki-editor { min-height: 420px; line-height: 1.5; }

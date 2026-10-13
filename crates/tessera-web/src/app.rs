@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::api;
 use crate::components::{Avatar, ErrorText};
 use crate::model::User;
-use crate::pages::{board, create, filters, issue, projects, search, your_work};
+use crate::pages::{board, create, filters, issue, projects, search, wiki, your_work};
 
 /// Shared state for the signed-in user.
 #[derive(Clone, Copy)]
@@ -111,6 +111,14 @@ fn Shell(me: User) -> impl IntoView {
                 <Route path=path!("/browse/:key") view=issue::IssuePage/>
                 <Route path=path!("/issues") view=search::SearchPage/>
                 <Route path=path!("/filters") view=filters::FiltersPage/>
+                <Route path=path!("/wiki") view=wiki::Spaces/>
+                <ParentRoute path=path!("/wiki/spaces/:key") view=wiki::SpaceLayout>
+                    <Route path=path!("") view=wiki::SpaceHome/>
+                    <Route path=path!("create") view=wiki::editor::CreatePage/>
+                    <Route path=path!("pages/:id") view=wiki::page::PageView/>
+                    <Route path=path!("pages/:id/edit") view=wiki::editor::EditPage/>
+                    <Route path=path!("pages/:id/history") view=wiki::page::PageHistory/>
+                </ParentRoute>
             </Routes>
         </div>
         <Show when=move || session.creating.get()>
@@ -163,6 +171,7 @@ fn TopNav() -> impl IntoView {
             <A href="/" attr:class="nav-link">"Your work"</A>
             <A href="/projects" attr:class="nav-link">"Projects"</A>
             <A href="/filters" attr:class="nav-link">"Filters"</A>
+            <A href="/wiki" attr:class="nav-link">"Spaces"</A>
             <button class="button primary" on:click=move |_| session.creating.set(true)>"Create"</button>
             <form class="nav-search" on:submit=search>
                 <input class="input" type="search" placeholder="Search or go to PROJ-1"

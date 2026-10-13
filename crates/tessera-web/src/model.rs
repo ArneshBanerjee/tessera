@@ -266,3 +266,133 @@ pub fn short_time(value: &str) -> String {
         value.to_string()
     }
 }
+
+// Confluence.
+
+/// A space, from the v2 API.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WikiSpace {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+    pub homepage_id: Option<String>,
+    pub description: Value,
+}
+
+impl WikiSpace {
+    pub fn description(&self) -> String {
+        self.description["plain"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
+/// A page as the v2 tree endpoints list it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TreePage {
+    pub id: String,
+    pub title: String,
+}
+
+/// One page of a v2 list.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CursorPage<T> {
+    pub results: Vec<T>,
+}
+
+/// One page of a v1 list.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WikiCollection<T> {
+    pub results: Vec<T>,
+    pub size: i64,
+}
+
+/// A user as the Confluence v1 API shows them.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WikiUser {
+    pub account_id: String,
+    pub display_name: String,
+}
+
+impl WikiUser {
+    /// The user as a Jira-style user, for the shared avatar component.
+    pub fn as_user(&self) -> User {
+        User {
+            account_id: self.account_id.clone(),
+            display_name: self.display_name.clone(),
+            avatar_urls: HashMap::from([(
+                "48x48".to_string(),
+                format!("/avatar/user/{}?size=48", self.account_id),
+            )]),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WikiVersion {
+    pub number: i64,
+    pub when: String,
+    pub message: String,
+    pub by: WikiUser,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WikiHistory {
+    pub created_by: WikiUser,
+    pub created_date: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WikiSpaceRef {
+    pub key: String,
+    pub name: String,
+}
+
+/// Content from the v1 API: a page, blog post, or comment, with what was expanded.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WikiContent {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub status: String,
+    pub title: String,
+    pub version: WikiVersion,
+    pub history: WikiHistory,
+    pub ancestors: Vec<WikiContent>,
+    pub space: WikiSpaceRef,
+    pub body: Value,
+    pub metadata: Value,
+}
+
+impl WikiContent {
+    /// The body drawn as HTML. The server sanitizes it.
+    pub fn view_html(&self) -> String {
+        self.body["view"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    pub fn labels(&self) -> Vec<String> {
+        self.metadata["labels"]["results"]
+            .as_array()
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(|l| l["name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}

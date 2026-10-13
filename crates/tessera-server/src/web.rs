@@ -15,10 +15,13 @@ struct Assets;
 /// Answers every request that no API route matched.
 ///
 /// A known file is served as is. Any other path gets `index.html`, so the web app can route it.
-/// Unknown API paths stay a 404 instead.
 pub async fn fallback(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
-    if path.starts_with("rest/") {
+    // Unknown API paths stay a 404 instead of getting the web app.
+    if ["rest/", "wiki/rest/", "wiki/api/"]
+        .iter()
+        .any(|api| path.starts_with(api))
+    {
         return StatusCode::NOT_FOUND.into_response();
     }
     if let Some(file) = Assets::get(path).filter(|_| !path.is_empty()) {

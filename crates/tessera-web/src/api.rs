@@ -8,6 +8,10 @@ use serde_json::Value;
 pub const CORE: &str = "/rest/api/3";
 /// The Jira Software API.
 pub const AGILE: &str = "/rest/agile/1.0";
+/// The Confluence v1 API.
+pub const WIKI: &str = "/wiki/rest/api";
+/// The Confluence v2 API.
+pub const WIKI2: &str = "/wiki/api/v2";
 
 /// An error from the API, with Jira's messages joined for display.
 #[derive(Debug, Clone, PartialEq)]
@@ -23,7 +27,8 @@ impl std::fmt::Display for ApiError {
 }
 
 impl ApiError {
-    /// Reads `errorMessages` and `errors` from a Jira error body.
+    /// Reads the messages of a Jira error (`errorMessages`, `errors`), a Confluence v1 error
+    /// (`message`), or a Confluence v2 error (`errors[].title`).
     fn from_body(status: u16, body: &Value) -> Self {
         let mut parts: Vec<String> = body["errorMessages"]
             .as_array()
@@ -40,6 +45,16 @@ impl ApiError {
                     .values()
                     .filter_map(|v| v.as_str().map(str::to_string)),
             );
+        }
+        if let Some(errors) = body["errors"].as_array() {
+            parts.extend(
+                errors
+                    .iter()
+                    .filter_map(|e| e["title"].as_str().map(str::to_string)),
+            );
+        }
+        if let Some(message) = body["message"].as_str() {
+            parts.push(message.to_string());
         }
         let message = if parts.is_empty() {
             format!("The request failed with status {status}.")

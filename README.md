@@ -39,7 +39,7 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 
 Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
-**Web app**: log in, your work, projects (create from scrum, kanban, or task tracking templates), the backlog (quick create, sprints, drag issues into sprints, start sprint), the board (drag cards to change status, complete sprint), the issue view (edit summary and description in Markdown, transitions, assignee, reporter, priority, labels, due date, story points, subtasks, issue links, attachments, comments, history, watch, delete), JQL search with saved filters and favourites, and quick search. The server serves the app from its own binary.
+**Web app**: log in, your work, projects (create from scrum, kanban, or task tracking templates), the backlog (quick create, sprints, drag issues into sprints, start sprint), the board (drag cards to change status, complete sprint), the issue view (edit summary and description in Markdown, transitions, assignee, reporter, priority, labels, due date, story points, subtasks, issue links, attachments, comments, history, watch, delete), JQL search with saved filters and favourites, and quick search. For Confluence: spaces, a page tree, pages with their history and old versions (with restore), a Markdown editor that saves pages as ADF, labels, and threaded comments. The server serves the app from its own binary.
 
 **Confluence** (`/wiki/rest/api`, the v1 API): spaces (with home pages), pages, blog posts, and comments with replies. Every version is kept: updates must name the next version number (409 otherwise, as in Confluence), old versions can be read and restored. The page tree: children, descendants, ancestors, and moving pages before, after, or under others. Trash and purge, labels, history, and content body conversion. Bodies use the storage format; the `view` format is sanitized HTML. Errors use Confluence's format.
 
@@ -49,7 +49,7 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, Confluence attachments, inline comments, and page restrictions, the Confluence web app, and import of Atlassian backups.
+Sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, Confluence attachments, inline comments, page restrictions, and a rich-text editor, and import of Atlassian backups.
 
 ## Compatibility
 
@@ -121,6 +121,6 @@ To work on the web app, run the server on port 8080 and `trunk serve` in `crates
 | 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions. **Done.** Roles and permissions follow. |
 | 4. Boards | Saved filters, scrum and kanban boards, sprints, backlog, ranking, epics, and the Agile REST API. **Done.** |
 | 5. Web UI | Leptos (Rust compiled to WebAssembly) app. **First version done.** A Tauri desktop app follows. |
-| 6. Confluence core | Spaces, page tree, versions, comments, labels, CQL, and the v1 and v2 APIs. **In progress.** Attachments, the web app, and the editor follow. |
+| 6. Confluence core | Spaces, page tree, versions, comments, labels, CQL, the v1 and v2 APIs, and the web app with a Markdown editor. **In progress.** Attachments and a rich-text editor follow. |
 | 7. Migration | Import of Jira Cloud and Confluence backups. |
 | 8. Launch | Jira and Confluence together. Service Management, Trello-style boards, and Statuspage follow. |

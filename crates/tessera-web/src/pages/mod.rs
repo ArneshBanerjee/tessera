@@ -6,6 +6,7 @@ pub mod filters;
 pub mod issue;
 pub mod projects;
 pub mod search;
+pub mod wiki;
 pub mod your_work;
 
 use leptos::prelude::*;
