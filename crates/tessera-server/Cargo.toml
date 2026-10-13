@@ -12,6 +12,8 @@ name = "tessera"
 path = "src/main.rs"
 
 [dependencies]
+ammonia.workspace = true
+html-escape.workspace = true
 tessera-adf.workspace = true
 tessera-jql.workspace = true
 axum.workspace = true

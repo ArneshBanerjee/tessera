@@ -10,6 +10,8 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/ArneshBanerjee/tessera"
 
 [workspace.dependencies]
+ammonia = "4.2.3"
+html-escape = "0.3.0"
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 tessera-adf = { path = "crates/tessera-adf" }
 tessera-jql = { path = "crates/tessera-jql" }

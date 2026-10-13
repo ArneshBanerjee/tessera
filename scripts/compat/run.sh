@@ -14,3 +14,4 @@ token=$(./target/debug/tessera --database "$db" create-token --email admin@compa
 server=$!
 for _ in $(seq 1 50); do curl -sf "http://127.0.0.1:$port/healthz" >/dev/null && break; sleep 0.2; done
 uv run --quiet scripts/compat/python_jira.py "http://127.0.0.1:$port" admin@compat.test "$token"
+uv run --quiet scripts/compat/python_confluence.py "http://127.0.0.1:$port" admin@compat.test "$token"

@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod confluence;
 pub mod db;
 pub mod error;
 pub mod jql;
@@ -28,5 +29,8 @@ pub struct AppState {
 
 /// Builds the whole HTTP application.
 pub fn app(state: AppState) -> Router {
-    api::router().fallback(web::fallback).with_state(state)
+    api::router()
+        .merge(confluence::router())
+        .fallback(web::fallback)
+        .with_state(state)
 }

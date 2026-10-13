@@ -15,6 +15,11 @@ fn zoned(ms: i64) -> Zoned {
         .to_zoned(TimeZone::UTC)
 }
 
+/// Formats a timestamp like Confluence: `2026-10-13T14:43:15.245Z`.
+pub fn format_iso(ms: i64) -> String {
+    zoned(ms).strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
 /// Formats a timestamp like Jira: `2026-10-13T14:43:15.245+0000`.
 pub fn format(ms: i64) -> String {
     zoned(ms).strftime("%Y-%m-%dT%H:%M:%S%.3f%z").to_string()

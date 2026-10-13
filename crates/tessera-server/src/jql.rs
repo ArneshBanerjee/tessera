@@ -1811,7 +1811,7 @@ fn single_text<'q>(atoms: &[Atom<'q>], name: &str) -> Result<&'q str> {
 }
 
 /// Converts JQL wildcards to a LIKE pattern and escapes LIKE's own special characters.
-fn like_pattern(term: &str) -> String {
+pub(crate) fn like_pattern(term: &str) -> String {
     let mut out = String::with_capacity(term.len());
     for c in term.chars() {
         match c {
