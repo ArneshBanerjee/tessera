@@ -55,6 +55,31 @@ pub enum Operator {
     Changed,
 }
 
+/// The operator as written in JQL, for error messages.
+impl std::fmt::Display for Operator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Equals => "=",
+            Self::NotEquals => "!=",
+            Self::GreaterThan => ">",
+            Self::GreaterThanEquals => ">=",
+            Self::LessThan => "<",
+            Self::LessThanEquals => "<=",
+            Self::In => "in",
+            Self::NotIn => "not in",
+            Self::Contains => "~",
+            Self::NotContains => "!~",
+            Self::Is => "is",
+            Self::IsNot => "is not",
+            Self::Was => "was",
+            Self::WasIn => "was in",
+            Self::WasNot => "was not",
+            Self::WasNotIn => "was not in",
+            Self::Changed => "changed",
+        })
+    }
+}
+
 impl Operator {
     /// Operators that look at field history and accept predicates such as `BY` or `DURING`.
     pub fn is_history(self) -> bool {

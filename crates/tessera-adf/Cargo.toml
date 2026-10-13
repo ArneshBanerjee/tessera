@@ -1,0 +1,12 @@
+[package]
+name = "tessera-adf"
+description = "Atlassian Document Format (ADF): the JSON rich-text format of the Jira and Confluence v3 APIs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

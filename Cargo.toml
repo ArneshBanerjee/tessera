@@ -10,6 +10,16 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/ArneshBanerjee/tessera"
 
 [workspace.dependencies]
+tessera-adf = { path = "crates/tessera-adf" }
+tessera-jql = { path = "crates/tessera-jql" }
+base64 = "0.23.1"
+form_urlencoded = "1.2.2"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+password-auth = "1.0.0"
+sha2 = "0.11.1"
+hex = "0.4.3"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "json"] }
+uuid = { version = "1.28.0", features = ["v4"] }
 axum = "0.8.9"
 jiff = "0.2.38"
 logos = "0.16.1"
