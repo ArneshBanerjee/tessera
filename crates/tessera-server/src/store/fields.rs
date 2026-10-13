@@ -74,7 +74,13 @@ pub const FIELD_TYPES: &[(&str, &str, &str)] = &[
         "array",
         "com.atlassian.jira.plugin.system.customfieldtypes:labels",
     ),
+    // Jira Software's built-in fields. Tessera creates one of each; clients cannot add more.
+    ("sprint", "array", "com.pyxis.greenhopper.jira:gh-sprint"),
+    ("rank", "any", "com.pyxis.greenhopper.jira:gh-lexo-rank"),
 ];
+
+/// Field types that only Tessera itself creates.
+pub const BUILT_IN_TYPES: &[&str] = &["sprint", "rank"];
 
 /// Maps a Jira custom type key (from `POST /field`) to Tessera's field type.
 pub fn type_from_jira_key(key: &str) -> Option<&'static str> {

@@ -2,9 +2,10 @@
 //!
 //! Tessera gives every custom field one global context, whose id equals the field id.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -230,6 +231,7 @@ pub fn custom_field_json(field: &CustomField) -> Value {
     let (schema_type, custom_key) = fields::jira_schema(&field.field_type);
     let mut schema = json!({ "type": schema_type, "custom": custom_key, "customId": field.id });
     match field.field_type.as_str() {
+        "sprint" => schema["items"] = json!("json"),
         "options" => schema["items"] = json!("option"),
         "labels" => schema["items"] = json!("string"),
         _ => {}
@@ -290,6 +292,12 @@ pub async fn create(
             ),
         )
     })?;
+    if fields::BUILT_IN_TYPES.contains(&field_type) {
+        return Err(ApiError::field(
+            "type",
+            "Tessera creates this field itself; another one cannot be added.",
+        ));
+    }
     let field = fields::create(
         &state.db,
         request.name.trim(),

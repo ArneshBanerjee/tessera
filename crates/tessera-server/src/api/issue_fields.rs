@@ -215,6 +215,15 @@ async fn set_field(
         }
         key if key.starts_with("customfield_") => {
             let field = custom.by_key(key).ok_or_else(|| cannot_set(key))?;
+            // The Sprint field moves the issue between sprints; Rank is set by the agile API.
+            match field.field_type.as_str() {
+                "sprint" => {
+                    target.open_sprint = sprint_ref(&ctx.state.db, key, value).await?;
+                    return Ok(());
+                }
+                "rank" => return Err(cannot_set(key)),
+                _ => {}
+            }
             let stored = custom_value(ctx, custom, field, value).await?;
             set_custom(target, field.id, stored);
         }
@@ -356,6 +365,29 @@ fn set_time_tracking(target: &mut IssueFields, value: &Value) -> ApiResult<()> {
         target.remaining_estimate = remaining;
     }
     Ok(())
+}
+
+/// The Sprint field takes a sprint id, or `null` to leave the sprint. Only open sprints accept issues.
+async fn sprint_ref(db: &SqlitePool, field: &str, value: &Value) -> ApiResult<Option<i64>> {
+    let Some(id) = json_id(value).or_else(|| value.get("id").and_then(json_id)) else {
+        return match value {
+            Value::Null => Ok(None),
+            _ => Err(ApiError::field(
+                field,
+                "Number value expected as the Sprint id.",
+            )),
+        };
+    };
+    let sprint = crate::store::sprints::by_id(db, id)
+        .await?
+        .ok_or_else(|| ApiError::field(field, format!("Sprint with id {id} does not exist")))?;
+    if !sprint.is_open() {
+        return Err(ApiError::field(
+            field,
+            "Issues can only be moved to open or active sprints.",
+        ));
+    }
+    Ok(Some(sprint.id))
 }
 
 /// Resolves a user reference. Jira Cloud clients send `{"accountId": ...}`; older ones send
@@ -859,6 +891,21 @@ pub async fn diff(
             });
         }
     }
+    if before.open_sprint != after.open_sprint
+        && let Some(field) = custom.fields.iter().find(|f| f.field_type == "sprint")
+    {
+        let from = sprint_name(&ctx.state.db, before.open_sprint).await?;
+        let to = sprint_name(&ctx.state.db, after.open_sprint).await?;
+        items.push(ChangeItem {
+            field: field.name.clone(),
+            field_id: super::fields::custom_field_key(field.id),
+            field_type: "custom".into(),
+            from_value: before.open_sprint.map(|id| id.to_string()),
+            from_string: from,
+            to_value: after.open_sprint.map(|id| id.to_string()),
+            to_string: to,
+        });
+    }
     for (field_id, new_value) in &after.custom_values {
         let old_value = before_custom
             .iter()
@@ -910,4 +957,11 @@ async fn part_name(db: &SqlitePool, part: Part, id: i64) -> ApiResult<String> {
         Part::FixVersions | Part::AffectsVersions => versions::by_id(db, id).await?.map(|v| v.name),
     }
     .unwrap_or_default())
+}
+
+async fn sprint_name(db: &SqlitePool, id: Option<i64>) -> ApiResult<Option<String>> {
+    Ok(match id {
+        Some(id) => crate::store::sprints::by_id(db, id).await?.map(|s| s.name),
+        None => None,
+    })
 }

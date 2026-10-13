@@ -645,3 +645,29 @@ async fn schemes_and_project_categories() {
         "the project keeps existing without a category"
     );
 }
+
+#[tokio::test]
+async fn bad_request_bodies_get_jira_errors() {
+    let app = TestApp::new().await;
+    let (status, _, body) = app
+        .raw(
+            Method::POST,
+            "/rest/api/3/project",
+            &[("content-type", "application/json")],
+            b"{not json".to_vec(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        body["errorMessages"][0]
+            .as_str()
+            .unwrap()
+            .contains("not valid")
+    );
+
+    let (status, _, _) = app
+        .raw(Method::POST, "/rest/api/3/project", &[], b"{}".to_vec())
+        .await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}

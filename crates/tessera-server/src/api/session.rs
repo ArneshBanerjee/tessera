@@ -1,6 +1,6 @@
 //! `/rest/auth/1/session`: cookie sessions for the web app, in the shape Jira Server uses.
 
-use axum::Json;
+use super::extract::Json;
 use axum::extract::State;
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderMap, StatusCode};

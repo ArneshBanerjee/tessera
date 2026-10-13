@@ -80,6 +80,8 @@ pub struct IssueFields {
     pub original_estimate: Option<i64>,
     /// Seconds.
     pub remaining_estimate: Option<i64>,
+    /// The open (future or active) sprint the issue is in. Closed sprints stay as history.
+    pub open_sprint: Option<i64>,
     /// Custom field id and its JSON value. `None` clears the value.
     pub custom_values: Vec<(i64, Option<String>)>,
 }
@@ -107,6 +109,7 @@ impl IssueFields {
             affects_versions: versions::of_issue(db, issue.id, Kind::Affects).await?,
             original_estimate: issue.original_estimate,
             remaining_estimate: issue.remaining_estimate,
+            open_sprint: open_sprint(db, issue.id).await?,
             custom_values: Vec::new(),
         })
     }
@@ -135,11 +138,16 @@ pub async fn create(
     .fetch_one(&mut *tx)
     .await?;
     let now = now_ms();
+    // New issues go to the bottom of the global rank order.
+    let last_rank: Option<String> = sqlx::query_scalar("SELECT MAX(lexo_rank) FROM issues")
+        .fetch_one(&mut *tx)
+        .await?;
+    let rank = crate::store::ranks::after(last_rank.as_deref());
     let issue: Issue = sqlx::query_as(concat!("INSERT INTO issues (project_id, number, key, issue_type_id, summary, description, environment,
             description_text, environment_text, status_id, priority_id, resolution_id, resolution_date,
             assignee_id, reporter_id, creator_id, parent_id, due_date, created_at, updated_at,
-            original_estimate, remaining_estimate)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            original_estimate, remaining_estimate, lexo_rank)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING ", columns!()))
     .bind(project_id)
     .bind(number)
@@ -163,6 +171,7 @@ pub async fn create(
     .bind(now)
     .bind(fields.original_estimate)
     .bind(fields.remaining_estimate)
+    .bind(&rank)
     .fetch_one(&mut *tx)
     .await?;
     write_relations(&mut tx, issue.id, fields).await?;
@@ -225,7 +234,42 @@ async fn write_relations(
     components::set_for_issue(tx, issue_id, &fields.components).await?;
     versions::set_for_issue(tx, issue_id, Kind::Fix, &fields.fix_versions).await?;
     versions::set_for_issue(tx, issue_id, Kind::Affects, &fields.affects_versions).await?;
+    set_open_sprint(tx, issue_id, fields.open_sprint).await?;
     write_custom_values(tx, issue_id, &fields.custom_values).await
+}
+
+/// The open sprint an issue is in, if any.
+pub async fn open_sprint(db: &SqlitePool, issue_id: i64) -> sqlx::Result<Option<i64>> {
+    sqlx::query_scalar(
+        "SELECT s.id FROM issue_sprints i JOIN sprints s ON s.id = i.sprint_id
+         WHERE i.issue_id = ? AND s.state != 'closed' ORDER BY s.sequence LIMIT 1",
+    )
+    .bind(issue_id)
+    .fetch_optional(db)
+    .await
+}
+
+/// Puts the issue in `sprint` (or no open sprint), keeping its closed sprints as history.
+async fn set_open_sprint(
+    conn: &mut SqliteConnection,
+    issue_id: i64,
+    sprint: Option<i64>,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "DELETE FROM issue_sprints WHERE issue_id = ?
+         AND sprint_id IN (SELECT id FROM sprints WHERE state != 'closed')",
+    )
+    .bind(issue_id)
+    .execute(&mut *conn)
+    .await?;
+    if let Some(sprint_id) = sprint {
+        sqlx::query("INSERT OR IGNORE INTO issue_sprints (issue_id, sprint_id) VALUES (?, ?)")
+            .bind(issue_id)
+            .bind(sprint_id)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn replace_labels(

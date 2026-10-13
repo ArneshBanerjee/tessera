@@ -1,9 +1,10 @@
 //! JQL search: the older `/search` (page by `startAt`) and the newer `/search/jql`
 //! (page by `nextPageToken`, and only issue ids unless `fields` asks for more).
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Query, RawQuery, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::sqlite::SqliteArguments;
@@ -18,11 +19,21 @@ use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
 use crate::jql::{self, Bind, SearchContext};
 use crate::store::users::{self, User};
-use crate::store::{components, issues, links, projects, versions};
+use crate::store::{components, issues, links, projects, sprints, versions};
 use crate::time::now_ms;
 
 /// The most issues one page may hold.
 const MAX_PAGE: i64 = 5000;
+
+/// Parses JQL, as Jira reports parse errors.
+pub fn parse_jql(jql_text: &str) -> ApiResult<tessera_jql::ast::Query> {
+    tessera_jql::parse(jql_text).map_err(|e| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Error in the JQL Query: {}", e.message),
+        )
+    })
+}
 
 /// Runs a JQL query and returns one page of issue ids plus the total match count.
 pub async fn run_jql(
@@ -32,12 +43,17 @@ pub async fn run_jql(
     start_at: i64,
     max_results: i64,
 ) -> ApiResult<(Vec<i64>, i64)> {
-    let query = tessera_jql::parse(jql_text).map_err(|e| {
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            format!("Error in the JQL Query: {}", e.message),
-        )
-    })?;
+    run_query(db, user, &parse_jql(jql_text)?, start_at, max_results).await
+}
+
+/// Runs a parsed query. Agile views build queries by combining parsed parts.
+pub async fn run_query(
+    db: &SqlitePool,
+    user: Option<&User>,
+    query: &tessera_jql::ast::Query,
+    start_at: i64,
+    max_results: i64,
+) -> ApiResult<(Vec<i64>, i64)> {
     let catalog = crate::store::meta::Catalog::load(db).await?;
     let custom = CustomCatalog::load(db).await?;
     let all_projects = projects::list(db).await?;
@@ -45,6 +61,8 @@ pub async fn run_jql(
     let all_components = components::all(db).await?;
     let all_versions = versions::all(db).await?;
     let link_types = links::types(db).await?;
+    let all_sprints = sprints::all(db).await?;
+    let visible_filters = super::filters::visible(db, user).await?;
     let ctx = SearchContext {
         catalog: &catalog,
         custom: &custom,
@@ -53,11 +71,13 @@ pub async fn run_jql(
         components: &all_components,
         versions: &all_versions,
         link_types: &link_types,
+        sprints: &all_sprints,
+        filters: &visible_filters,
         current_user: user.map(|u| u.id),
         now: now_ms(),
     };
     let compiled =
-        jql::compile(&query, &ctx).map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.0))?;
+        jql::compile(query, &ctx).map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.0))?;
 
     let arguments = |extra: &[i64]| {
         let mut args = SqliteArguments::default();

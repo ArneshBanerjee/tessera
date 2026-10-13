@@ -4,9 +4,10 @@
 //! administer), one notification setup, and no issue security levels yet. Each is exposed as
 //! the single default scheme Jira clients look for when they create projects.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Value, json};
 

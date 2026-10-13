@@ -2,9 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -344,9 +345,28 @@ pub async fn issue_json(
         if !view.wants(&key) {
             continue;
         }
-        let value = match stored.iter().find(|(id, _)| *id == field.id) {
-            Some((_, value)) => render_custom_value(ctx, custom, field, value).await?,
-            None => Value::Null,
+        let value = match field.field_type.as_str() {
+            // Jira Software fields keep their values outside the custom value table.
+            "sprint" => {
+                let all = crate::store::sprints::of_issue(&db, issue.id).await?;
+                if all.is_empty() {
+                    Value::Null
+                } else {
+                    Value::Array(
+                        all.iter()
+                            .map(|s| super::agile::sprint_json(ctx, s))
+                            .collect(),
+                    )
+                }
+            }
+            "rank" => crate::store::ranks::of_issue(&db, issue.id)
+                .await?
+                .map(|rank| json!(crate::store::ranks::display(&rank)))
+                .unwrap_or(Value::Null),
+            _ => match stored.iter().find(|(id, _)| *id == field.id) {
+                Some((_, value)) => render_custom_value(ctx, custom, field, value).await?,
+                None => Value::Null,
+            },
         };
         fields.insert(key, value);
     }

@@ -1,7 +1,8 @@
 //! Issue metadata: issue types, statuses, status categories, priorities, and resolutions.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Path, State};
-use axum::{Extension, Json};
 use serde_json::Value;
 
 use super::ApiVersion;

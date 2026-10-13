@@ -1,6 +1,6 @@
 //! `GET /serverInfo`. Anyone may call it, as in Jira.
 
-use axum::Json;
+use super::extract::Json;
 use axum::extract::State;
 use serde_json::{Value, json};
 

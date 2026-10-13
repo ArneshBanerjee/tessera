@@ -16,9 +16,11 @@ use tessera_jql::ast::{
 
 use crate::store::components::Component;
 use crate::store::fields::{CustomCatalog, CustomField};
+use crate::store::filters::Filter;
 use crate::store::links::LinkType;
 use crate::store::meta::Catalog;
 use crate::store::projects::Project;
+use crate::store::sprints::Sprint;
 use crate::store::users::User;
 use crate::store::versions::Version;
 use crate::time;
@@ -32,6 +34,9 @@ pub struct SearchContext<'a> {
     pub components: &'a [Component],
     pub versions: &'a [Version],
     pub link_types: &'a [LinkType],
+    pub sprints: &'a [Sprint],
+    /// Saved filters the searching user may see, for `filter = ...` clauses.
+    pub filters: &'a [Filter],
     pub current_user: Option<i64>,
     pub now: i64,
 }
@@ -62,6 +67,7 @@ pub fn compile(query: &Query, ctx: &SearchContext) -> Result<Compiled> {
     let mut compiler = Compiler {
         ctx,
         binds: Vec::new(),
+        depth: 0,
     };
     let filter = match &query.filter {
         Some(clause) => compiler.clause(clause)?,
@@ -126,6 +132,9 @@ enum Kind<'a> {
     WorklogDate,
     WorklogComment,
     Attachments,
+    Sprint,
+    /// The global issue order. It can only be sorted on.
+    Rank,
 }
 
 /// Total seconds logged on the issue, as SQL.
@@ -169,7 +178,12 @@ fn placeholders(n: usize) -> String {
 struct Compiler<'a> {
     ctx: &'a SearchContext<'a>,
     binds: Vec<Bind>,
+    /// How many saved filters deep the compiler is, to stop reference cycles.
+    depth: usize,
 }
+
+/// Saved filters may refer to other filters up to this depth.
+const MAX_FILTER_DEPTH: usize = 10;
 
 impl<'a> Compiler<'a> {
     fn clause(&mut self, clause: &Clause) -> Result<String> {
@@ -190,7 +204,15 @@ impl<'a> Compiler<'a> {
     }
 
     fn resolve(&self, field: &Field) -> Result<(Kind<'a>, String)> {
-        let custom = |f: &'a CustomField| (Kind::Custom(f), f.name.clone());
+        // Jira Software's Sprint and Rank are custom fields with their own behavior.
+        let custom = |f: &'a CustomField| {
+            let kind = match f.field_type.as_str() {
+                "sprint" => Kind::Sprint,
+                "rank" => Kind::Rank,
+                _ => Kind::Custom(f),
+            };
+            (kind, f.name.clone())
+        };
         match field {
             Field::CustomField(id) => self
                 .ctx
@@ -262,6 +284,10 @@ impl<'a> Compiler<'a> {
                     "worklogdate" => Kind::WorklogDate,
                     "worklogcomment" => Kind::WorklogComment,
                     "attachments" => Kind::Attachments,
+                    "sprint" => Kind::Sprint,
+                    "rank" => Kind::Rank,
+                    // The legacy Epic Link field is the parent of an issue in an epic.
+                    "epic link" => Kind::Parent,
                     _ => {
                         return self
                             .ctx
@@ -279,6 +305,14 @@ impl<'a> Compiler<'a> {
     }
 
     fn terminal(&mut self, terminal: &Terminal) -> Result<String> {
+        if let Field::Name(field) = &terminal.field
+            && matches!(
+                field.to_ascii_lowercase().as_str(),
+                "filter" | "savedfilter" | "request"
+            )
+        {
+            return self.saved_filter(terminal, field);
+        }
         let (kind, name) = self.resolve(&terminal.field)?;
         let op = terminal.operator;
         if op.is_history() {
@@ -423,6 +457,15 @@ impl<'a> Compiler<'a> {
                     exists
                 })
             }
+            Kind::Sprint => {
+                let (ids, empty) = self.sprint_ids(&atoms, &name)?;
+                let any = "EXISTS (SELECT 1 FROM issue_sprints s WHERE s.issue_id = i.id)";
+                let with = "EXISTS (SELECT 1 FROM issue_sprints s WHERE s.issue_id = i.id AND s.sprint_id IN ({}))";
+                self.relation(any, with, &ids, empty, op, &name)
+            }
+            Kind::Rank => Err(JqlError(format!(
+                "The field '{name}' can only be used in ORDER BY."
+            ))),
             Kind::Attachments => {
                 let exists = "EXISTS (SELECT 1 FROM attachments a WHERE a.issue_id = i.id)";
                 match op {
@@ -455,6 +498,24 @@ impl<'a> Compiler<'a> {
                     if self.ctx.current_user.is_none() {
                         ids.push(-1);
                     }
+                    continue;
+                }
+                // standardIssueTypes() and subTaskIssueTypes() list issue types by hierarchy.
+                Atom::Function(function, _)
+                    if matches!(kind, Kind::IssueType)
+                        && matches!(
+                            function.to_ascii_lowercase().as_str(),
+                            "standardissuetypes" | "subtaskissuetypes"
+                        ) =>
+                {
+                    let subtasks = function.eq_ignore_ascii_case("subTaskIssueTypes");
+                    ids.extend(
+                        catalog
+                            .issue_types
+                            .iter()
+                            .filter(|t| t.is_subtask() == subtasks)
+                            .map(|t| t.id),
+                    );
                     continue;
                 }
                 Atom::Function(function, _) => return Err(function_not_supported(function, name)),
@@ -1101,6 +1162,108 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// `filter = 10000` or `filter in ("My open bugs")`: the saved filter's own JQL.
+    fn saved_filter(&mut self, terminal: &Terminal, name: &str) -> Result<String> {
+        let op = terminal.operator;
+        if !matches!(
+            op,
+            Operator::Equals | Operator::NotEquals | Operator::In | Operator::NotIn
+        ) {
+            return Err(unsupported(op, name));
+        }
+        if self.depth >= MAX_FILTER_DEPTH {
+            return Err(JqlError(
+                "Saved filters refer to each other too deeply.".into(),
+            ));
+        }
+        let atoms = terminal.operand.as_ref().map(atoms).unwrap_or_default();
+        let mut parts = Vec::new();
+        for atom in atoms {
+            let Atom::Value(reference) = atom else {
+                return Err(unsupported(op, name));
+            };
+            let filter = self
+                .ctx
+                .filters
+                .iter()
+                .find(|f| f.id.to_string() == reference)
+                .or_else(|| {
+                    self.ctx
+                        .filters
+                        .iter()
+                        .find(|f| f.name.eq_ignore_ascii_case(reference))
+                })
+                .ok_or_else(|| {
+                    JqlError(format!(
+                        "A filter with name or id '{reference}' does not exist or you do not have permission to view it."
+                    ))
+                })?;
+            let query = tessera_jql::parse(&filter.jql).map_err(|e| {
+                JqlError(format!(
+                    "The saved filter '{}' has invalid JQL: {}",
+                    filter.name, e.message
+                ))
+            })?;
+            self.depth += 1;
+            let compiled = match &query.filter {
+                Some(clause) => self.clause(clause),
+                None => Ok("1 = 1".to_string()),
+            };
+            self.depth -= 1;
+            parts.push(format!("({})", compiled?));
+        }
+        let any = format!("({})", parts.join(" OR "));
+        Ok(if matches!(op, Operator::NotEquals | Operator::NotIn) {
+            format!("NOT {any}")
+        } else {
+            any
+        })
+    }
+
+    /// Sprints named by id, name, or `openSprints()`, `closedSprints()`, `futureSprints()`.
+    fn sprint_ids(&self, atoms: &[Atom], name: &str) -> Result<(Vec<i64>, bool)> {
+        let mut ids = Vec::new();
+        let mut empty = false;
+        for &atom in atoms {
+            match atom {
+                Atom::Empty => empty = true,
+                Atom::Value(text) => {
+                    let found: Vec<i64> = self
+                        .ctx
+                        .sprints
+                        .iter()
+                        .filter(|s| s.id.to_string() == text || s.name.eq_ignore_ascii_case(text))
+                        .map(|s| s.id)
+                        .collect();
+                    if found.is_empty() {
+                        return Err(JqlError(format!(
+                            "The value '{text}' does not exist for the field '{name}'."
+                        )));
+                    }
+                    ids.extend(found);
+                }
+                Atom::Function(function, _) => {
+                    let states: &[&str] = match function.to_ascii_lowercase().as_str() {
+                        "opensprints" => &["active", "future"],
+                        "closedsprints" => &["closed"],
+                        "futuresprints" => &["future"],
+                        _ => return Err(function_not_supported(function, name)),
+                    };
+                    let found: Vec<i64> = self
+                        .ctx
+                        .sprints
+                        .iter()
+                        .filter(|s| states.contains(&s.state.as_str()))
+                        .map(|s| s.id)
+                        .collect();
+                    // No such sprints means no matches, not every issue.
+                    ids.extend(if found.is_empty() { vec![-1] } else { found });
+                }
+            }
+        }
+        Ok((ids, empty))
+    }
+
     /// Membership in a related set, such as components, watchers, or worklog authors.
     /// `with` holds `{}` where the id placeholders go. Follows Jira's rules: negative operators
     /// do not match issues where the set is empty.
@@ -1532,6 +1695,7 @@ impl<'a> Compiler<'a> {
                 }
                 Kind::Duration { expr } => expr.to_string(),
                 Kind::WorkRatio => WORK_RATIO.to_string(),
+                Kind::Rank => "i.lexo_rank".into(),
                 Kind::Custom(field) => {
                     let value = format!(
                         "(SELECT {} FROM issue_field_values v WHERE v.issue_id = i.id AND v.field_id = {})",

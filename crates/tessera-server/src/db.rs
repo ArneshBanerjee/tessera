@@ -20,5 +20,7 @@ pub async fn connect(url: &str) -> Result<SqlitePool, sqlx::Error> {
         .connect_with(options)
         .await?;
     sqlx::migrate!().run(&pool).await?;
+    // Issues created before ranking existed need a place in the order.
+    crate::store::ranks::backfill(&pool).await?;
     Ok(pool)
 }

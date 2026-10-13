@@ -1,8 +1,9 @@
 //! Projects: `/project`, `/project/search`, `/project/{idOrKey}`, `/project/{idOrKey}/statuses`.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -11,6 +12,7 @@ use super::{ApiVersion, Page};
 use crate::AppState;
 use crate::auth::{AdminUser, CurrentUser};
 use crate::error::{ApiError, ApiResult};
+use crate::store::filters::{self, Share};
 use crate::store::projects::{self, NewProject, Project, ProjectUpdate};
 use crate::store::{users, workflows};
 
@@ -124,8 +126,10 @@ pub struct NewProjectRequest {
     #[serde(default)]
     url: String,
     assignee_type: Option<String>,
-    // `permissionScheme`, `notificationScheme`, `issueSecurityScheme`, and `projectTemplateKey`
-    // are accepted and ignored: Tessera has one default of each.
+    /// Software templates (scrum, kanban, basic) also create a board, as in Jira.
+    project_template_key: Option<String>,
+    // `permissionScheme`, `notificationScheme`, and `issueSecurityScheme` are accepted and
+    // ignored: Tessera has one default of each.
 }
 
 fn check_assignee_type(value: Option<&str>) -> ApiResult<()> {
@@ -231,6 +235,10 @@ pub async fn create(
         },
     )
     .await?;
+    if let Some(board_type) = template_board_type(&project, request.project_template_key.as_deref())
+    {
+        create_project_board(&state, admin.id, &project, board_type).await?;
+    }
     // Jira returns a numeric id here, unlike everywhere else.
     Ok((
         StatusCode::CREATED,
@@ -330,4 +338,55 @@ pub async fn statuses(
             })
             .collect(),
     ))
+}
+
+/// The board a project template comes with: scrum for scrum templates, kanban for kanban and
+/// basic software templates, none otherwise.
+fn template_board_type(project: &Project, template: Option<&str>) -> Option<&'static str> {
+    let template = template?.to_ascii_lowercase();
+    if project.project_type_key != "software" {
+        return None;
+    }
+    if template.contains("scrum") {
+        Some("scrum")
+    } else if template.contains("kanban") || template.contains("basic") {
+        Some("kanban")
+    } else {
+        None
+    }
+}
+
+/// Creates "Filter for KEY board" (shared with the project) and the "KEY board" on it.
+async fn create_project_board(
+    state: &AppState,
+    owner_id: i64,
+    project: &Project,
+    board_type: &str,
+) -> ApiResult<()> {
+    let filter = filters::create(
+        &state.db,
+        owner_id,
+        &format!("Filter for {} board", project.key),
+        "",
+        &format!("project = {} ORDER BY Rank ASC", project.key),
+    )
+    .await?;
+    filters::set_shares(
+        &state.db,
+        filter.id,
+        &[Share {
+            share_type: "project".into(),
+            project_id: Some(project.id),
+        }],
+    )
+    .await?;
+    super::agile::create_board(
+        &state.db,
+        &format!("{} board", project.key),
+        board_type,
+        filter.id,
+        Some(project),
+    )
+    .await?;
+    Ok(())
 }

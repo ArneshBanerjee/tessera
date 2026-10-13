@@ -1,9 +1,10 @@
 //! Watchers and votes: `/issue/{idOrKey}/watchers` and `/issue/{idOrKey}/votes`.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Value, json};
 

@@ -1,10 +1,11 @@
 //! Attachments: upload to an issue, read metadata, download, and delete.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
 use serde_json::{Value, json};
 
 use super::ApiVersion;

@@ -109,6 +109,26 @@ attachment = jira.add_attachment("COMPAT-2", attachment=io.BytesIO(b"compat file
 check("attachment uploaded", attachment.filename == "compat.txt" and attachment.size == 11)
 check("attachment content", jira.attachment(attachment.id).get() == b"compat file")
 
+saved = jira.create_filter(name="Compat tasks", jql="project = COMPAT AND type = Task", favourite=True)
+check("filter created", jira.filter(saved.id).jql == "project = COMPAT AND type = Task")
+check("favourite filters", any(f.id == saved.id for f in jira.favourite_filters()))
+board = jira.create_board("Compat board", saved.id, preset="scrum", location_type="project", location_id="COMPAT")
+check("board created", any(b.id == board.id for b in jira.boards()))
+user_board = jira.create_board("My board", saved.id)
+check("user board created", user_board.name == "My board")
+sprint = jira.create_sprint("Compat sprint", board.id)
+jira.add_issues_to_sprint(sprint.id, ["COMPAT-2", "COMPAT-3"])
+check("issues in sprint", len(jira.search_issues(f"sprint = {sprint.id}")) == 2)
+jira.update_sprint(sprint.id, name="Compat sprint", state="active",
+                   startDate="2026-10-13T09:00:00.000+0000", endDate="2026-10-27T09:00:00.000+0000")
+check("sprint started", jira.sprint(sprint.id).state.lower() == "active")
+check("board sprints", [s.name for s in jira.sprints(board.id)] == ["Compat sprint"])
+jira.rank("COMPAT-4", next_issue="COMPAT-2")
+ranked = [i.key for i in jira.search_issues("project = COMPAT ORDER BY Rank ASC")]
+check("rank", ranked.index("COMPAT-4") == ranked.index("COMPAT-2") - 1)
+jira.move_to_backlog(["COMPAT-3"])
+check("moved to backlog", [i.key for i in jira.search_issues("sprint in openSprints()")] == ["COMPAT-2"])
+
 jira.issue("COMPAT-5").delete()
 check("issue deleted", len(jira.search_issues("project = COMPAT", maxResults=False)) == 4)
 

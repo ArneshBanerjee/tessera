@@ -3,9 +3,12 @@
 //! Every route is served under both `/rest/api/2` and `/rest/api/3`. The versions differ only in
 //! rich text: v2 uses plain strings, v3 uses ADF documents. Handlers read [`ApiVersion`] to pick.
 
+pub mod agile;
 mod attachments;
 mod comments;
+pub mod extract;
 mod fields;
+pub mod filters;
 mod issue_fields;
 mod issues;
 mod links;
@@ -76,6 +79,7 @@ pub fn router() -> Router<AppState> {
                 .post(session::login)
                 .delete(session::logout),
         )
+        .nest("/rest/agile/1.0", agile::router())
         .nest(
             "/rest/api/2",
             jira_routes().layer(Extension(ApiVersion::V2)),
@@ -266,6 +270,22 @@ fn jira_routes() -> Router<AppState> {
             "/project/{id_or_key}/version",
             get(parts::project_versions_paged),
         )
+        // Saved filters
+        .route("/filter", post(filters::create))
+        .route("/filter/search", get(filters::search))
+        .route("/filter/my", get(filters::my))
+        .route("/filter/favourite", get(filters::favourites))
+        .route(
+            "/filter/{id}",
+            get(filters::get)
+                .put(filters::update)
+                .delete(filters::delete),
+        )
+        .route(
+            "/filter/{id}/favourite",
+            put(filters::add_favourite).delete(filters::remove_favourite),
+        )
+        .route("/filter/{id}/permission", get(filters::permissions))
         // Search
         .route("/search", get(search::get).post(search::post))
         .route("/search/jql", get(search::jql_get).post(search::jql_post))

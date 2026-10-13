@@ -12,7 +12,7 @@ Tessera is licensed under the [GNU Affero General Public License v3.0 or later](
 
 ## What works today
 
-The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`:
+The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, and the Jira Software API under `/rest/agile/1.0`:
 
 | Area | Endpoints |
 | --- | --- |
@@ -28,21 +28,24 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`:
 | Issue links | Link types, create and delete links (with Jira's inward and outward naming), `issuelinks` on issues |
 | Worklogs | Log, edit, and delete work, with remaining estimate adjustment (`auto`, `new`, `manual`, `leave`) and time tracking fields |
 | Attachments | Upload (multipart, with Jira's XSRF header check), download, delete, metadata |
+| Saved filters | Create, read, update, delete, search, favourites, sharing (global, signed-in users, project), and `filter = ...` in JQL |
 | Fields | System fields, custom fields (text, number, date, user, select, multi-select, labels) and their options |
 | Search | `search` and `search/jql`, with paging, `names`, and the rules below |
 | Metadata | Issue types, statuses, status categories, priorities, resolutions, permission, notification and security schemes |
 
-**JQL** follows Jira's rules: `=`, `!=`, `IN`, `NOT IN`, `IS EMPTY`, `~`, comparisons, `WAS`, `WAS IN`, `WAS NOT`, `CHANGED` with `FROM`, `TO`, `BY`, `AFTER`, `BEFORE`, `ON`, `DURING`, relative dates (`-7d`), date functions (`startOfWeek(-1)`, `endOfMonth()`), `currentUser()`, custom fields by name or `cf[id]`, and `ORDER BY`. It also searches components, fix and affected versions (with `releasedVersions()`, `unreleasedVersions()`, `latestReleasedVersion()`, `earliestUnreleasedVersion()`), watchers and voters (`watchedIssues()`, `votedIssues()`), links (`linkedIssues()`, `issueLinkType`), time tracking (`timespent > 4h`), worklogs, and attachments. Errors use Jira's wording.
+**Jira Software** (`/rest/agile/1.0`): scrum and kanban boards with columns, board issues and backlog, sprints (create, start, complete, delete, swap, move issues), global ranking, epics (issues, colors, done, rank), estimation, and board and sprint properties. Software projects created from scrum, kanban, or basic templates get a board, as in Jira. Sprint, Rank, and Story point estimate are built-in fields.
+
+**JQL** follows Jira's rules: `=`, `!=`, `IN`, `NOT IN`, `IS EMPTY`, `~`, comparisons, `WAS`, `WAS IN`, `WAS NOT`, `CHANGED` with `FROM`, `TO`, `BY`, `AFTER`, `BEFORE`, `ON`, `DURING`, relative dates (`-7d`), date functions (`startOfWeek(-1)`, `endOfMonth()`), `currentUser()`, custom fields by name or `cf[id]`, and `ORDER BY`. It also searches components, fix and affected versions (with `releasedVersions()`, `unreleasedVersions()`, `latestReleasedVersion()`, `earliestUnreleasedVersion()`), watchers and voters (`watchedIssues()`, `votedIssues()`), links (`linkedIssues()`, `issueLinkType`), time tracking (`timespent > 4h`), worklogs, attachments, sprints (`openSprints()`, `closedSprints()`, `futureSprints()`), saved filters, `"Epic Link"`, `standardIssueTypes()`, and `ORDER BY Rank`. Errors use Jira's wording.
 
 Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Web UI, boards and sprints, project roles and fine-grained permissions, notifications, Confluence, and import of Atlassian backups.
+Web UI, sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, Confluence, and import of Atlassian backups.
 
 ## Compatibility
 
-`scripts/compat/run.sh` starts a throwaway server and drives it with the official Python [`jira`](https://pypi.org/project/jira/) client, unchanged: projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, components, versions, watchers, links, worklogs, attachments, and deletion. CI runs it on every push.
+`scripts/compat/run.sh` starts a throwaway server and drives it with the official Python [`jira`](https://pypi.org/project/jira/) client, unchanged: projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, components, versions, watchers, links, worklogs, attachments, saved filters, boards, sprints, ranking, the backlog, and deletion. CI runs it on every push.
 
 ## Run it
 
@@ -101,7 +104,7 @@ scripts/compat/run.sh
 | 1. Foundation | Workspace, JQL parser, server. **Done.** |
 | 2. Jira core API | Users, projects, issues, workflows, comments, custom fields, JQL search, history. **Done.** |
 | 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions. **Done.** Roles and permissions follow. |
-| 4. Boards | Scrum and Kanban boards, sprints, backlog, and the Agile REST API. |
+| 4. Boards | Saved filters, scrum and kanban boards, sprints, backlog, ranking, epics, and the Agile REST API. **Done.** |
 | 5. Web UI | Leptos (Rust compiled to WebAssembly) app, and a Tauri desktop app. |
 | 6. Confluence core | Spaces, page tree, rich-text editor, comments, and core macros. |
 | 7. Migration | Import of Jira Cloud and Confluence backups. |

@@ -1,8 +1,9 @@
 //! Project components and versions: `/component`, `/version`, and their project listings.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;

@@ -1,8 +1,9 @@
 //! Workflow transitions: `GET` and `POST /issue/{idOrKey}/transitions`.
 
+use super::extract::Json;
+use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
