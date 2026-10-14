@@ -30,10 +30,11 @@ pub struct NewUser<'a> {
     pub is_admin: bool,
 }
 
+/// Creates a user. They join Confluence's default group, as new Atlassian users do.
 pub async fn create(db: &SqlitePool, user: NewUser<'_>) -> sqlx::Result<User> {
     // Jira Cloud account ids are opaque strings; a random hex id is enough.
     let account_id = uuid::Uuid::new_v4().simple().to_string();
-    sqlx::query_as(concat!(
+    let created: User = sqlx::query_as(concat!(
         "INSERT INTO users (account_id, email, display_name, password_hash, is_admin, created_at)
          VALUES (?, ?, ?, ?, ?, ?) RETURNING ",
         columns!()
@@ -45,7 +46,13 @@ pub async fn create(db: &SqlitePool, user: NewUser<'_>) -> sqlx::Result<User> {
     .bind(user.is_admin)
     .bind(now_ms())
     .fetch_one(db)
-    .await
+    .await?;
+    sqlx::query("INSERT OR IGNORE INTO group_members (group_id, user_id) SELECT id, ? FROM groups WHERE name = ?")
+        .bind(created.id)
+        .bind(super::space_permissions::DEFAULT_GROUP)
+        .execute(db)
+        .await?;
+    Ok(created)
 }
 
 pub async fn by_id(db: &SqlitePool, id: i64) -> sqlx::Result<Option<User>> {

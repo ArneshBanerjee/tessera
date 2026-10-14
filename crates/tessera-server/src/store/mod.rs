@@ -20,6 +20,7 @@ pub mod projects;
 pub mod properties;
 pub mod ranks;
 pub mod social;
+pub mod space_permissions;
 pub mod spaces;
 pub mod sprints;
 pub mod users;

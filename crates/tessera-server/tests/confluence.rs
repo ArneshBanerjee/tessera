@@ -576,3 +576,105 @@ async fn attachments_keep_versions() {
     let (_, list) = app.get(&path).await;
     assert_eq!(list["size"], 1);
 }
+
+#[tokio::test]
+async fn space_permissions_decide_access() {
+    use axum::http::Method;
+    let app = TestApp::new().await;
+    space(&app, "DOCS").await;
+    let page_id = id(&page(&app, "DOCS", "Guide", None).await);
+    let (dev, account) = app.user("dev@tessera.test", "Dev").await;
+    let get = |path: String| {
+        let dev = dev.clone();
+        let app = &app;
+        async move { app.request(Method::GET, &path, Some(&dev), None).await }
+    };
+
+    // By default, everyone in confluence-users reads and adds pages, but cannot administer.
+    let (status, _) = get(format!("{API}/content/{page_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app
+        .request(
+            Method::POST,
+            &format!("{API}/content"),
+            Some(&dev),
+            Some(json!({ "type": "page", "title": "By dev", "space": { "key": "DOCS" } })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app
+        .request(
+            Method::PUT,
+            &format!("{API}/space/DOCS"),
+            Some(&dev),
+            Some(json!({ "name": "Taken" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Deleting someone else's page needs Delete pages.
+    let (status, _) = app
+        .request(
+            Method::DELETE,
+            &format!("{API}/content/{page_id}"),
+            Some(&dev),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Take the default group's permissions away: the space disappears for the user.
+    let (_, read) = app
+        .get(&format!("{API}/space/DOCS?expand=permissions"))
+        .await;
+    for permission in read["permissions"].as_array().unwrap() {
+        if permission["subjects"]["group"]["results"][0]["name"] == "confluence-users" {
+            let id = permission["id"].as_i64().unwrap();
+            let (status, _) = app
+                .delete(&format!("{API}/space/DOCS/permission/{id}"))
+                .await;
+            assert_eq!(status, StatusCode::NO_CONTENT);
+        }
+    }
+    let (status, _) = get(format!("{API}/content/{page_id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = get(format!("{API}/space/DOCS")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, spaces) = get(format!("{API}/space")).await;
+    assert_eq!(spaces["size"], 0);
+    let (_, found) = get(format!("{API}/content/search?cql=type%3Dpage")).await;
+    assert_eq!(found["size"], 0);
+
+    // Granting the user read access by account id brings it back.
+    let (status, granted) = app
+        .post(
+            &format!("{API}/space/DOCS/permission"),
+            json!({ "subject": { "type": "user", "identifier": account }, "operation": { "key": "read", "target": "space" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{granted}");
+    let (status, _) = get(format!("{API}/content/{page_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    // Reading is not writing.
+    let (status, _) = app
+        .request(
+            Method::POST,
+            &format!("{API}/content"),
+            Some(&dev),
+            Some(json!({ "type": "page", "title": "Again", "space": { "key": "DOCS" } })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (_, v2) = app.get("/wiki/api/v2/spaces?keys=DOCS").await;
+    let space_id = v2["results"][0]["id"].as_str().unwrap().to_string();
+    let (_, listed) = app
+        .get(&format!("/wiki/api/v2/spaces/{space_id}/permissions"))
+        .await;
+    assert!(
+        listed["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["principal"]["id"] == json!(account))
+    );
+}

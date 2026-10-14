@@ -3,6 +3,7 @@
 //! - `/wiki/rest/api`: the v1 API (spaces, content, children, history, labels, CQL search).
 //! - `/wiki/api/v2`: the v2 API (spaces, pages, blog posts, footer comments, versions, labels).
 
+pub mod access;
 mod attachments;
 mod content;
 pub mod cql;
@@ -44,6 +45,11 @@ fn v1() -> Router<AppState> {
         .route(
             "/space/{key}",
             get(spaces::get).put(spaces::update).delete(spaces::delete),
+        )
+        .route("/space/{key}/permission", post(spaces::add_permission))
+        .route(
+            "/space/{key}/permission/{id}",
+            axum::routing::delete(spaces::remove_permission),
         )
         .route("/space/{key}/content", get(spaces::content))
         .route("/space/{key}/content/{kind}", get(spaces::content_of_type))

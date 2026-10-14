@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/spaces/{id}", get(get_space))
         .route("/spaces/{id}/pages", get(space_pages))
         .route("/spaces/{id}/blogposts", get(space_blogposts))
+        .route("/spaces/{id}/permissions", get(space_permissions_list))
         .route("/pages", get(list_pages).post(create_page))
         .route(
             "/pages/{id}",
@@ -375,17 +376,21 @@ fn body_format(params: &Params) -> V2Result<Option<&str>> {
 
 // Spaces.
 
-async fn find_space_by_id(state: &AppState, id: &str) -> V2Result<Space> {
+/// A space the user can read. Others are reported as missing.
+async fn find_space_by_id(state: &AppState, user: &User, id: &str) -> V2Result<Space> {
+    let missing = || WikiError::not_found(format!("No space with id {id}"));
     let found = match id.parse::<i64>() {
         Ok(number) => spaces::by_id(&state.db, number).await?,
         Err(_) => None,
     };
-    found.ok_or_else(|| WikiError::not_found(format!("No space with id {id}")).into())
+    let space = found.ok_or_else(missing)?;
+    super::access::readable(&state.db, user, space.id, missing).await?;
+    Ok(space)
 }
 
 async fn list_spaces(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     params: Params,
 ) -> V2Result<Json<Value>> {
     let filter = SpaceFilter {
@@ -397,6 +402,7 @@ async fn list_spaces(
             .collect(),
         space_type: params.get("type").map(str::to_string),
         status: params.get("status").map(str::to_string),
+        only: super::access::readable_spaces(&state.db, &user).await?,
     };
     let (all, _) = spaces::list(&state.db, &filter, 0, i64::MAX / 2).await?;
     let mut ctx = V2Ctx::new(&state);
@@ -409,11 +415,11 @@ async fn list_spaces(
 
 async fn get_space(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let space = find_space_by_id(&state, &id).await?;
+    let space = find_space_by_id(&state, &user, &id).await?;
     Ok(Json(
         V2Ctx::new(&state)
             .space(&space, params.get("description-format"))
@@ -447,8 +453,14 @@ async fn create_space(
 }
 
 /// Pages or blog posts of a space. For pages, `depth=root` keeps only the top level.
-async fn space_items(state: &AppState, id: &str, kind: &str, params: &Params) -> V2Result<Value> {
-    let space = find_space_by_id(state, id).await?;
+async fn space_items(
+    state: &AppState,
+    user: &User,
+    id: &str,
+    kind: &str,
+    params: &Params,
+) -> V2Result<Value> {
+    let space = find_space_by_id(state, user, id).await?;
     let items = if kind == "page" && params.get("depth") == Some("root") {
         content::root_pages(&state.db, space.id).await?
     } else {
@@ -475,26 +487,30 @@ async fn space_items(state: &AppState, id: &str, kind: &str, params: &Params) ->
 
 async fn space_pages(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    Ok(Json(space_items(&state, &id, "page", &params).await?))
+    Ok(Json(
+        space_items(&state, &user, &id, "page", &params).await?,
+    ))
 }
 
 async fn space_blogposts(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    Ok(Json(space_items(&state, &id, "blogpost", &params).await?))
+    Ok(Json(
+        space_items(&state, &user, &id, "blogpost", &params).await?,
+    ))
 }
 
 // Pages and blog posts.
 
 /// `GET /pages` and `GET /blogposts`: filtered by id, space, status, and title, then sorted.
-async fn list_items(state: &AppState, kind: &str, params: &Params) -> V2Result<Value> {
+async fn list_items(state: &AppState, user: &User, kind: &str, params: &Params) -> V2Result<Value> {
     let statuses = {
         let given = params.all("status");
         if given.is_empty() {
@@ -528,6 +544,7 @@ async fn list_items(state: &AppState, kind: &str, params: &Params) -> V2Result<V
             .await?,
         );
     }
+    super::access::retain_readable(&state.db, user, &mut items).await?;
     items.retain(|c| {
         (ids.is_empty() || ids.contains(&c.id))
             && (space_ids.is_empty() || space_ids.contains(&c.space_id))
@@ -554,18 +571,18 @@ async fn list_items(state: &AppState, kind: &str, params: &Params) -> V2Result<V
 
 async fn list_pages(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    Ok(Json(list_items(&state, "page", &params).await?))
+    Ok(Json(list_items(&state, &user, "page", &params).await?))
 }
 
 async fn list_blogposts(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    Ok(Json(list_items(&state, "blogpost", &params).await?))
+    Ok(Json(list_items(&state, &user, "blogpost", &params).await?))
 }
 
 #[derive(Deserialize)]
@@ -621,10 +638,10 @@ async fn create_item(
         .as_ref()
         .and_then(service::content_id)
         .ok_or_else(|| WikiError::bad_request("spaceId is required"))?;
-    let space = find_space_by_id(state, &space_id).await?;
+    let space = find_space_by_id(state, user, &space_id).await?;
     // Without a parent, new pages go under the space's home page unless `root-level` is set.
     let parent = match request.parent_id.as_ref().and_then(service::content_id) {
-        Some(id) if kind == "page" => Some(service::parent_page(state, &id, space.id).await?),
+        Some(id) if kind == "page" => Some(service::parent_page(state, user, &id, space.id).await?),
         _ if kind == "page" && params.get("root-level") != Some("true") => {
             match space.homepage_id {
                 Some(home) => content::by_id(&state.db, home)
@@ -676,11 +693,16 @@ async fn create_blogpost(
 }
 
 /// A page or blog post (not a comment), found by id.
-async fn find_item(state: &AppState, id: &str, current_only: bool) -> V2Result<Content> {
+async fn find_item(
+    state: &AppState,
+    user: &User,
+    id: &str,
+    current_only: bool,
+) -> V2Result<Content> {
     let found = if current_only {
-        find_current(state, id).await?
+        find_current(state, user, id).await?
     } else {
-        find_content(state, id).await?
+        find_content(state, user, id).await?
     };
     if found.content_type != "page" && found.content_type != "blogpost" {
         return Err(WikiError::content_not_found(id).into());
@@ -690,11 +712,11 @@ async fn find_item(state: &AppState, id: &str, current_only: bool) -> V2Result<C
 
 async fn get_content(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let mut found = find_item(&state, &id, false).await?;
+    let mut found = find_item(&state, &user, &id, false).await?;
     if found.status == "trashed" && params.get("status") != Some("trashed") {
         return Err(WikiError::content_not_found(&id).into());
     }
@@ -723,7 +745,7 @@ async fn update_content(
     Path(id): Path<String>,
     Json(request): Json<ContentRequest>,
 ) -> V2Result<Json<Value>> {
-    let found = find_item(&state, &id, false).await?;
+    let found = find_item(&state, &user, &id, false).await?;
     let number = request.version["number"]
         .as_i64()
         .ok_or_else(|| WikiError::bad_request("version.number is required"))?;
@@ -733,7 +755,7 @@ async fn update_content(
                 && Some(parent.clone()) != found.parent_id.map(|p| p.to_string()) =>
         {
             Parent::Move(Some(
-                service::parent_page(&state, &parent, found.space_id).await?,
+                service::parent_page(&state, &user, &parent, found.space_id).await?,
             ))
         }
         _ => Parent::Keep,
@@ -759,7 +781,7 @@ async fn update_title(
     Path(id): Path<String>,
     Json(request): Json<ContentRequest>,
 ) -> V2Result<Json<Value>> {
-    let found = find_item(&state, &id, true).await?;
+    let found = find_item(&state, &user, &id, true).await?;
     let save = Save {
         number: request.version["number"]
             .as_i64()
@@ -778,26 +800,26 @@ async fn update_title(
 /// `DELETE`: moves to the trash; with `purge=true`, deletes trashed content for good.
 async fn delete_content(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<StatusCode> {
-    let found = find_item(&state, &id, false).await?;
+    let found = find_item(&state, &user, &id, false).await?;
     let purge = params.get("purge") == Some("true");
     if found.status == "trashed" && !purge {
         return Err(WikiError::content_not_found(&id).into());
     }
-    service::remove(&state, &found, purge).await?;
+    service::remove(&state, &user, &found, purge).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn children(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let page = find_item(&state, &id, true).await?;
+    let page = find_item(&state, &user, &id, true).await?;
     let items: Vec<Value> = content::children(&state.db, page.id, "page")
         .await?
         .iter()
@@ -822,11 +844,11 @@ async fn children(
 
 async fn descendants(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let page = find_item(&state, &id, true).await?;
+    let page = find_item(&state, &user, &id, true).await?;
     let max_depth = params.int("depth").unwrap_or(5).clamp(1, 5);
     let mut items = Vec::new();
     // Walk depth first, keeping each page's depth below `page`.
@@ -861,10 +883,10 @@ async fn descendants(
 
 async fn ancestors(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> V2Result<Json<Value>> {
-    let page = find_item(&state, &id, true).await?;
+    let page = find_item(&state, &user, &id, true).await?;
     let results: Vec<Value> = content::ancestors(&state.db, &page)
         .await?
         .iter()
@@ -877,11 +899,11 @@ async fn ancestors(
 
 async fn versions(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let found = find_item(&state, &id, true).await?;
+    let found = find_item(&state, &user, &id, true).await?;
     let mut ctx = V2Ctx::new(&state);
     let mut items = Vec::new();
     for version in content::versions(&state.db, found.id).await? {
@@ -904,10 +926,10 @@ async fn versions(
 
 async fn version(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id, number)): Path<(String, i64)>,
 ) -> V2Result<Json<Value>> {
-    let found = find_item(&state, &id, true).await?;
+    let found = find_item(&state, &user, &id, true).await?;
     let version = content::version(&state.db, found.id, number)
         .await?
         .ok_or_else(|| WikiError::not_found(format!("No version {number} of content {id}")))?;
@@ -943,11 +965,11 @@ async fn labels_page(
 
 async fn content_labels(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let found = find_item(&state, &id, true).await?;
+    let found = find_item(&state, &user, &id, true).await?;
     let path = format!("/{}s/{id}/labels", found.content_type);
     Ok(Json(labels_page(&state, found.id, &params, &path).await?))
 }
@@ -972,11 +994,11 @@ async fn comments_page(
 /// Top-level comments on a page or blog post.
 async fn footer_comments_of(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let found = find_item(&state, &id, true).await?;
+    let found = find_item(&state, &user, &id, true).await?;
     let top: Vec<Content> = content::comments(&state.db, found.id)
         .await?
         .into_iter()
@@ -988,10 +1010,10 @@ async fn footer_comments_of(
 
 async fn list_footer_comments(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let all = content::list(
+    let mut all = content::list(
         &state.db,
         &ListFilter {
             content_type: Some("comment".into()),
@@ -999,13 +1021,14 @@ async fn list_footer_comments(
         },
     )
     .await?;
+    super::access::retain_readable(&state.db, &user, &mut all).await?;
     Ok(Json(
         comments_page(&state, &all, &params, "/footer-comments").await?,
     ))
 }
 
-async fn find_comment(state: &AppState, id: &str) -> V2Result<Content> {
-    let found = find_current(state, id).await?;
+async fn find_comment(state: &AppState, user: &User, id: &str) -> V2Result<Content> {
+    let found = find_current(state, user, id).await?;
     if found.content_type != "comment" {
         return Err(WikiError::content_not_found(id).into());
     }
@@ -1014,11 +1037,11 @@ async fn find_comment(state: &AppState, id: &str) -> V2Result<Content> {
 
 async fn get_footer_comment(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let found = find_comment(&state, &id).await?;
+    let found = find_comment(&state, &user, &id).await?;
     Ok(Json(
         V2Ctx::new(&state)
             .comment(&found, body_format(&params)?)
@@ -1048,7 +1071,7 @@ async fn create_footer_comment(
         .as_ref()
         .and_then(service::content_id)
     {
-        Some(id) => Some(find_comment(&state, &id).await?),
+        Some(id) => Some(find_comment(&state, &user, &id).await?),
         None => None,
     };
     let container_id = match (
@@ -1060,7 +1083,7 @@ async fn create_footer_comment(
         (None, None) => None,
     }
     .ok_or_else(|| WikiError::bad_request("pageId, blogPostId, or parentCommentId is required"))?;
-    let container = find_item(&state, &container_id, true).await?;
+    let container = find_item(&state, &user, &container_id, true).await?;
     let body = request_body(&request.body)?.unwrap_or_default();
     let created =
         service::create_comment(&state, &user, &container, reply_to.as_ref(), &body).await?;
@@ -1074,7 +1097,7 @@ async fn update_footer_comment(
     Path(id): Path<String>,
     Json(request): Json<CommentRequest>,
 ) -> V2Result<Json<Value>> {
-    let found = find_comment(&state, &id).await?;
+    let found = find_comment(&state, &user, &id).await?;
     if found.creator_id != user.id && !user.is_admin {
         return Err(
             WikiError::new(StatusCode::FORBIDDEN, "Only the author can edit a comment").into(),
@@ -1101,7 +1124,7 @@ async fn delete_footer_comment(
     CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> V2Result<StatusCode> {
-    let found = find_comment(&state, &id).await?;
+    let found = find_comment(&state, &user, &id).await?;
     if found.creator_id != user.id && !user.is_admin {
         return Err(WikiError::new(
             StatusCode::FORBIDDEN,
@@ -1109,17 +1132,17 @@ async fn delete_footer_comment(
         )
         .into());
     }
-    service::remove(&state, &found, true).await?;
+    service::remove(&state, &user, &found, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn comment_replies(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let found = find_comment(&state, &id).await?;
+    let found = find_comment(&state, &user, &id).await?;
     let replies = content::children(&state.db, found.id, "comment").await?;
     Ok(Json(
         comments_page(
@@ -1134,8 +1157,8 @@ async fn comment_replies(
 
 // Attachments.
 
-async fn find_attachment(state: &AppState, id: &str) -> V2Result<Content> {
-    let found = find_content(state, id).await?;
+async fn find_attachment(state: &AppState, user: &User, id: &str) -> V2Result<Content> {
+    let found = find_content(state, user, id).await?;
     if found.content_type != "attachment" {
         return Err(WikiError::content_not_found(id).into());
     }
@@ -1144,10 +1167,10 @@ async fn find_attachment(state: &AppState, id: &str) -> V2Result<Content> {
 
 async fn get_attachment(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> V2Result<Json<Value>> {
-    let found = find_attachment(&state, &id).await?;
+    let found = find_attachment(&state, &user, &id).await?;
     if found.status != "current" {
         return Err(WikiError::content_not_found(&id).into());
     }
@@ -1157,27 +1180,27 @@ async fn get_attachment(
 /// Moves an attachment to the trash; with `purge=true`, deletes a trashed one for good.
 async fn delete_attachment(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<StatusCode> {
-    let found = find_attachment(&state, &id).await?;
+    let found = find_attachment(&state, &user, &id).await?;
     let purge = params.get("purge") == Some("true");
     if found.status == "trashed" && !purge {
         return Err(WikiError::content_not_found(&id).into());
     }
-    service::remove(&state, &found, purge).await?;
+    service::remove(&state, &user, &found, purge).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Attachments of a page or blog post, optionally filtered by `filename` and `mediaType`.
 async fn attachments_of(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> V2Result<Json<Value>> {
-    let container = find_item(&state, &id, true).await?;
+    let container = find_item(&state, &user, &id, true).await?;
     let mut ctx = V2Ctx::new(&state);
     let mut items = Vec::new();
     for attachment in content::attachments(&state.db, container.id).await? {
@@ -1192,4 +1215,32 @@ async fn attachments_of(
     }
     let path = format!("/{}s/{id}/attachments", container.content_type);
     Ok(Json(paged(&state, &path, &params, items)?))
+}
+
+/// `GET /spaces/{id}/permissions`: who may do what in a space.
+async fn space_permissions_list(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+    params: Params,
+) -> V2Result<Json<Value>> {
+    let space = find_space_by_id(&state, &user, &id).await?;
+    let mut items = Vec::new();
+    for permission in crate::store::space_permissions::for_space(&state.db, space.id).await? {
+        let principal = match permission.subject_type.as_str() {
+            "anonymous" => json!({ "type": "anonymous", "id": null }),
+            kind => json!({ "type": kind, "id": permission.subject }),
+        };
+        items.push(json!({
+            "id": permission.id.to_string(),
+            "principal": principal,
+            "operation": { "key": permission.operation, "targetType": permission.target },
+        }));
+    }
+    Ok(Json(paged(
+        &state,
+        &format!("/spaces/{id}/permissions"),
+        &params,
+        items,
+    )?))
 }

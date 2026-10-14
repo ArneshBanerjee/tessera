@@ -7,6 +7,7 @@ use sqlx::Arguments;
 use sqlx::sqlite::SqliteArguments;
 
 use super::Params;
+use super::access;
 use super::cql::{self, Compiled, CqlContext, Target};
 use super::error::{WikiError, WikiResult};
 use super::render::WikiCtx;
@@ -44,7 +45,23 @@ async fn compile(
         current_user: Some(user.id),
         now: now_ms(),
     };
-    cql::compile(cql_text, &ctx, target).map_err(|e| WikiError::bad_request(e.0))
+    let mut compiled =
+        cql::compile(cql_text, &ctx, target).map_err(|e| WikiError::bad_request(e.0))?;
+    // Content and spaces the user cannot read are never found.
+    if let Some(ids) = access::readable_spaces(&state.db, user).await? {
+        let column = match target {
+            Target::Content => "c.space_id",
+            Target::Spaces => "s.id",
+        };
+        compiled.filter = if ids.is_empty() {
+            format!("({}) AND 0 = 1", compiled.filter)
+        } else {
+            let marks = vec!["?"; ids.len()].join(", ");
+            format!("({}) AND {column} IN ({marks})", compiled.filter)
+        };
+        compiled.binds.extend(ids.into_iter().map(Bind::Int));
+    }
+    Ok(compiled)
 }
 
 /// Ids of current content matching the query, in order.

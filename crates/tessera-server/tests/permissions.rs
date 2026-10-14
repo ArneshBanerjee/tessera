@@ -245,7 +245,17 @@ async fn a_private_scheme_hides_the_project() {
         None,
     )
     .await;
-    assert_eq!(groups[0]["name"], "developers");
+    let names: Vec<&str> = groups
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["confluence-users", "developers"],
+        "everyone is in the default Confluence group"
+    );
 
     // Deleting the scheme returns the project to the default.
     let (status, _) = app

@@ -6,10 +6,12 @@ use std::collections::HashMap;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
+use super::access;
 use super::error::{WikiError, WikiResult};
 use crate::AppState;
 use crate::store::attachments::SaveError;
 use crate::store::content::{self, Content, Edit, NewContent};
+use crate::store::space_permissions;
 use crate::store::spaces::{self, NewSpace, Space};
 use crate::store::users::{self, User};
 use crate::store::wiki_files::{self, FileVersion};
@@ -24,18 +26,24 @@ pub fn content_id(value: &Value) -> Option<String> {
 }
 
 /// Content by id, in any status. Attachment ids may carry Confluence's `att` prefix.
-pub async fn find_content(state: &AppState, id: &str) -> WikiResult<Content> {
+/// Content in a space the user cannot read is reported as missing.
+pub async fn find_content(state: &AppState, user: &User, id: &str) -> WikiResult<Content> {
     let number = id.strip_prefix("att").unwrap_or(id);
     let found = match number.parse::<i64>() {
         Ok(number) => content::by_id(&state.db, number).await?,
         Err(_) => None,
     };
-    found.ok_or_else(|| WikiError::content_not_found(id))
+    let found = found.ok_or_else(|| WikiError::content_not_found(id))?;
+    access::readable(&state.db, user, found.space_id, || {
+        WikiError::content_not_found(id)
+    })
+    .await?;
+    Ok(found)
 }
 
 /// Content that is current (not trashed or a draft), as most reads require.
-pub async fn find_current(state: &AppState, id: &str) -> WikiResult<Content> {
-    let found = find_content(state, id).await?;
+pub async fn find_current(state: &AppState, user: &User, id: &str) -> WikiResult<Content> {
+    let found = find_content(state, user, id).await?;
     if found.status != "current" {
         return Err(WikiError::content_not_found(id));
     }
@@ -165,6 +173,7 @@ pub async fn create_space(
         },
     )
     .await?;
+    space_permissions::grant_defaults(&state.db, space.id, &user.account_id).await?;
     let home = content::create(
         &state.db,
         &NewContent {
@@ -234,8 +243,13 @@ pub async fn check_title(
 }
 
 /// A parent page must be a current page in the same space.
-pub async fn parent_page(state: &AppState, id: &str, space_id: i64) -> WikiResult<Content> {
-    let parent = find_current(state, id).await?;
+pub async fn parent_page(
+    state: &AppState,
+    user: &User,
+    id: &str,
+    space_id: i64,
+) -> WikiResult<Content> {
+    let parent = find_current(state, user, id).await?;
     if parent.content_type != "page" || parent.space_id != space_id {
         return Err(WikiError::bad_request(format!(
             "The parent page {id} must be a page in the same space"
@@ -274,6 +288,7 @@ pub struct NewPage<'a> {
 }
 
 pub async fn create_page(state: &AppState, user: &User, page: NewPage<'_>) -> WikiResult<Content> {
+    access::require(&state.db, user, page.space.id, "create", page.kind).await?;
     check_status(page.status)?;
     if page.status == "current" {
         check_title(state, page.space.id, page.kind, page.title, None).await?;
@@ -318,6 +333,7 @@ pub async fn create_comment(
     if body.trim().is_empty() {
         return Err(WikiError::bad_request("Comment body cannot be empty"));
     }
+    access::require(&state.db, user, container.space_id, "create", "comment").await?;
     Ok(content::create(
         &state.db,
         &NewContent {
@@ -362,6 +378,15 @@ pub async fn save(
     found: &Content,
     save: Save<'_>,
 ) -> WikiResult<Content> {
+    // Editing a page needs "Add pages"; others' comments need space administration.
+    let rights = access::require(&state.db, user, found.space_id, "read", "space").await?;
+    let allowed = match found.content_type.as_str() {
+        "comment" => found.creator_id == user.id || rights.can("administer", "space"),
+        kind => rights.can("create", kind),
+    };
+    if !allowed {
+        return Err(access::denied("edit", &found.content_type));
+    }
     if save.number != found.version + 1 {
         return Err(WikiError::conflict(format!(
             "Version must be incremented on update. Current version is: {}",
@@ -410,11 +435,22 @@ pub async fn save(
 
 /// Moves current content to the trash, or deletes it for good when `purge` is set and it is
 /// already in the trash. Comments and drafts are always deleted at once.
-pub async fn remove(state: &AppState, found: &Content, purge: bool) -> WikiResult<()> {
+pub async fn remove(state: &AppState, user: &User, found: &Content, purge: bool) -> WikiResult<()> {
+    let rights = access::require(&state.db, user, found.space_id, "read", "space").await?;
+    let own = found.creator_id == user.id;
+    if !rights.can_delete(&found.content_type, own) {
+        return Err(access::denied("delete", &found.content_type));
+    }
     match found.status.as_str() {
         "current" if found.content_type == "comment" => purge_with_files(state, found).await?,
         "current" => content::trash(&state.db, found, now_ms()).await?,
-        "trashed" if purge => purge_with_files(state, found).await?,
+        // Emptying the trash is for space administrators.
+        "trashed" if purge => {
+            if !rights.can("administer", "space") {
+                return Err(access::denied("purge", &found.content_type));
+            }
+            purge_with_files(state, found).await?
+        }
         "draft" => purge_with_files(state, found).await?,
         _ => return Err(WikiError::content_not_found(&found.id.to_string())),
     }
@@ -471,6 +507,7 @@ pub async fn attach(
     if upload.filename.trim().is_empty() {
         return Err(WikiError::bad_request("The file needs a name"));
     }
+    access::require(&state.db, user, container.space_id, "create", "attachment").await?;
     let attachment = match existing {
         Some(found) => {
             content::update(

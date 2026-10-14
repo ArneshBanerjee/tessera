@@ -67,6 +67,8 @@ pub struct SpaceFilter {
     pub ids: Vec<i64>,
     pub space_type: Option<String>,
     pub status: Option<String>,
+    /// When set, only these spaces, for example the ones a user can read.
+    pub only: Option<Vec<i64>>,
 }
 
 /// One page of spaces, ordered by key as Confluence does, and whether more follow.
@@ -91,6 +93,7 @@ pub async fn list(
                 .as_ref()
                 .is_none_or(|t| *t == s.space_type)
             && filter.status.as_ref().is_none_or(|t| *t == s.status)
+            && filter.only.as_ref().is_none_or(|only| only.contains(&s.id))
     });
     let more = spaces.len() as i64 > start + limit;
     let page = spaces

@@ -125,11 +125,11 @@ async fn render_list(
 /// `GET /content/{id}/child/attachment`, optionally filtered by `filename` and `mediaType`.
 pub async fn list(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let container = find_current(&state, &id).await?;
+    let container = find_current(&state, &user, &id).await?;
     let mut items = content::attachments(&state.db, container.id).await?;
     if let Some(filename) = params.get("filename") {
         items.retain(|a| a.title == filename);
@@ -160,7 +160,7 @@ pub async fn create(
     multipart: Multipart,
 ) -> WikiResult<Json<Value>> {
     check_token(&headers)?;
-    let container = find_current(&state, &id).await?;
+    let container = find_current(&state, &user, &id).await?;
     let (parts, minor_edit) = read_parts(multipart).await?;
     let saved = attach_parts(&state, &user, &container, parts, minor_edit, false).await?;
     let path = format!("/content/{id}/child/attachment");
@@ -177,7 +177,7 @@ pub async fn create_or_update(
     multipart: Multipart,
 ) -> WikiResult<Json<Value>> {
     check_token(&headers)?;
-    let container = find_current(&state, &id).await?;
+    let container = find_current(&state, &user, &id).await?;
     let (parts, minor_edit) = read_parts(multipart).await?;
     let saved = attach_parts(&state, &user, &container, parts, minor_edit, true).await?;
     let path = format!("/content/{id}/child/attachment");
@@ -194,8 +194,8 @@ pub async fn update_data(
     multipart: Multipart,
 ) -> WikiResult<Json<Value>> {
     check_token(&headers)?;
-    let container = find_current(&state, &id).await?;
-    let attachment = find_current(&state, &attachment_id).await?;
+    let container = find_current(&state, &user, &id).await?;
+    let attachment = find_current(&state, &user, &attachment_id).await?;
     if attachment.content_type != "attachment" || attachment.container_id != Some(container.id) {
         return Err(WikiError::content_not_found(&attachment_id));
     }
@@ -229,11 +229,11 @@ fn shown_inline(media_type: &str) -> bool {
 /// `GET /wiki/download/attachments/{pageId}/{filename}`, with an optional `version`.
 pub async fn download(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((page_id, filename)): Path<(String, String)>,
     params: Params,
 ) -> WikiResult<Response> {
-    let container = find_content(&state, &page_id).await?;
+    let container = find_content(&state, &user, &page_id).await?;
     let attachment = content::attachments(&state.db, container.id)
         .await?
         .into_iter()

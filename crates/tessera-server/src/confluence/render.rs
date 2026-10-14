@@ -10,6 +10,7 @@ use super::service::{self, Names};
 use crate::AppState;
 use crate::store::content::{self, Content, Version};
 use crate::store::labels::{self, Label};
+use crate::store::space_permissions::{self, SpacePermission};
 use crate::store::spaces::{self, Space};
 use crate::store::users::{self, User};
 use crate::store::wiki_files;
@@ -206,11 +207,19 @@ impl<'a> WikiCtx<'a> {
             }
             None => {}
         }
+        if expand.has("permissions") {
+            let mut list = Vec::new();
+            for permission in space_permissions::for_space(&self.state.db, space.id).await? {
+                list.push(self.space_permission(&permission).await?);
+            }
+            out["permissions"] = json!(list);
+        } else {
+            expandable.insert("permissions".into(), json!(""));
+        }
         for key in [
             "icon",
             "metadata",
             "operations",
-            "permissions",
             "settings",
             "theme",
             "lookAndFeel",
@@ -220,6 +229,31 @@ impl<'a> WikiCtx<'a> {
         }
         out["_expandable"] = Value::Object(expandable);
         Ok(out)
+    }
+
+    /// A space permission in the v1 shape: who it is for, and which operation it grants.
+    pub async fn space_permission(&mut self, permission: &SpacePermission) -> WikiResult<Value> {
+        let mut subjects = Value::Null;
+        match permission.subject_type.as_str() {
+            "user" => {
+                if let Some(user) =
+                    users::by_account_id(&self.state.db, &permission.subject).await?
+                {
+                    subjects = json!({ "user": { "results": [self.user(&user)], "size": 1 } });
+                }
+            }
+            "group" => {
+                subjects = json!({ "group": { "results": [{ "type": "group", "name": permission.subject }], "size": 1 } });
+            }
+            _ => {}
+        }
+        Ok(json!({
+            "id": permission.id,
+            "subjects": subjects,
+            "operation": { "operation": permission.operation, "targetType": permission.target },
+            "anonymousAccess": permission.subject_type == "anonymous",
+            "unlicensedAccess": false,
+        }))
     }
 
     async fn space_by_id(&mut self, id: i64, expand: &Expand) -> WikiResult<Value> {

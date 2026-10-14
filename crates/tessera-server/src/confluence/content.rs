@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::Params;
+use super::access;
 use super::error::{WikiError, WikiResult};
 use super::render::{self, Expand, WikiCtx};
 use super::service::{self, NewPage, Parent, Save, check_not_below, find_content, find_current};
@@ -15,6 +16,7 @@ use crate::api::extract::Json;
 use crate::auth::CurrentUser;
 use crate::store::content::{self, Content, ListFilter};
 use crate::store::labels;
+use crate::store::users::User;
 use crate::time;
 
 pub use service::content_id;
@@ -84,10 +86,10 @@ pub async fn create(
             let key = request.space["key"]
                 .as_str()
                 .ok_or_else(|| WikiError::bad_request("Space key is required"))?;
-            let space = find_space(&state, key).await?;
+            let space = find_space(&state, &user, key).await?;
             let parent = match last_ancestor(&request.ancestors)? {
                 Some(id) if content_type == "page" => {
-                    Some(service::parent_page(&state, &id, space.id).await?)
+                    Some(service::parent_page(&state, &user, &id, space.id).await?)
                 }
                 _ => None,
             };
@@ -104,9 +106,9 @@ pub async fn create(
         "comment" => {
             let container_id = content_id(&request.container["id"])
                 .ok_or_else(|| WikiError::bad_request("A comment needs a container"))?;
-            let container = find_current(&state, &container_id).await?;
+            let container = find_current(&state, &user, &container_id).await?;
             let reply_to = match last_ancestor(&request.ancestors)? {
-                Some(id) => Some(find_current(&state, &id).await?),
+                Some(id) => Some(find_current(&state, &user, &id).await?),
                 None => None,
             };
             service::create_comment(&state, &user, &container, reply_to.as_ref(), &body).await?
@@ -127,7 +129,7 @@ pub async fn create(
 /// `GET /content`: pages or blog posts, filtered by space, title, status, and posting day.
 pub async fn list(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     params: Params,
 ) -> WikiResult<Json<Value>> {
     let (start, limit) = params.page(25, 500);
@@ -159,7 +161,8 @@ pub async fn list(
         filter.created_from = Some(from);
         filter.created_before = Some(from + 86_400_000);
     }
-    let all = content::list(&state.db, &filter).await?;
+    let mut all = content::list(&state.db, &filter).await?;
+    access::retain_readable(&state.db, &user, &mut all).await?;
     let more = all.len() as i64 > start + limit;
     let expand = params.expand();
     let mut ctx = WikiCtx::new(&state);
@@ -175,11 +178,11 @@ pub async fn list(
 /// `GET /content/{id}`. `version` reads an older version; `status` allows trashed content.
 pub async fn get(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let mut found = find_content(&state, &id).await?;
+    let mut found = find_content(&state, &user, &id).await?;
     let statuses = params.all("status");
     let allowed = if statuses.is_empty() {
         found.status == "current"
@@ -215,7 +218,7 @@ pub async fn update(
     params: Params,
     Json(request): Json<ContentRequest>,
 ) -> WikiResult<Json<Value>> {
-    let found = find_content(&state, &id).await?;
+    let found = find_content(&state, &user, &id).await?;
     let number = request.version["number"]
         .as_i64()
         .ok_or_else(|| WikiError::bad_request("Version number is required to update content"))?;
@@ -229,7 +232,7 @@ pub async fn update(
     }
     let parent = match last_ancestor(&request.ancestors)? {
         Some(id) if found.content_type == "page" => Parent::Move(Some(
-            service::parent_page(&state, &id, found.space_id).await?,
+            service::parent_page(&state, &user, &id, found.space_id).await?,
         )),
         _ => Parent::Keep,
     };
@@ -254,26 +257,26 @@ pub async fn update(
 /// content that is already in the trash. Drafts are deleted at once.
 pub async fn delete(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<StatusCode> {
-    let found = find_content(&state, &id).await?;
+    let found = find_content(&state, &user, &id).await?;
     // Trashed content is invisible unless the client names its status.
     if found.status == "trashed" && params.get("status") != Some("trashed") {
         return Err(WikiError::content_not_found(&id));
     }
-    service::remove(&state, &found, true).await?;
+    service::remove(&state, &user, &found, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn children(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     Ok(Json(
         WikiCtx::new(&state)
             .children(&found, &params.expand())
@@ -300,11 +303,11 @@ async fn list_of(
 
 pub async fn children_of_type(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id, kind)): Path<(String, String)>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     // `depth=all` lists replies along with top-level comments.
     let items = if kind == "comment" && params.get("depth") == Some("all") {
         render::descendant_list(&state.db, &found, &kind).await?
@@ -317,11 +320,11 @@ pub async fn children_of_type(
 
 pub async fn descendants(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     let expand = params.expand().with("page").with("comment");
     let mut ctx = WikiCtx::new(&state);
     let mut out = serde_json::Map::new();
@@ -343,11 +346,11 @@ pub async fn descendants(
 
 pub async fn descendants_of_type(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id, kind)): Path<(String, String)>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     let items = render::descendant_list(&state.db, &found, &kind).await?;
     let path = format!("/content/{id}/descendant/{kind}");
     Ok(Json(list_of(&state, items, &params, path).await?))
@@ -355,11 +358,11 @@ pub async fn descendants_of_type(
 
 pub async fn history(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     // This endpoint includes the last update unless the client picks its own expansions.
     let expand = match params.get("expand") {
         Some(_) => params.expand(),
@@ -370,11 +373,11 @@ pub async fn history(
 
 pub async fn versions(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     let (start, limit) = params.page(200, 200);
     let all = content::versions(&state.db, found.id).await?;
     let more = all.len() as i64 > start + limit;
@@ -394,10 +397,10 @@ pub async fn versions(
 
 pub async fn version(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id, number)): Path<(String, i64)>,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     let version = content::version(&state.db, found.id, number)
         .await?
         .ok_or_else(|| WikiError::not_found(format!("No version {number} of content {id}")))?;
@@ -411,7 +414,7 @@ pub async fn restore_version(
     Path(id): Path<String>,
     Json(request): Json<Value>,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     if request["operationKey"].as_str() != Some("restore") {
         return Err(WikiError::bad_request("operationKey must be restore"));
     }
@@ -440,11 +443,11 @@ pub async fn restore_version(
 
 pub async fn labels(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
     let mut list = labels::for_content(&state.db, found.id).await?;
     if let Some(prefix) = params.get("prefix") {
         list.retain(|l| l.prefix == prefix);
@@ -488,11 +491,12 @@ fn label_name(name: &str) -> WikiResult<String> {
 
 pub async fn add_labels(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Json(request): Json<Value>,
 ) -> WikiResult<Json<Value>> {
-    let found = find_current(&state, &id).await?;
+    let found = find_current(&state, &user, &id).await?;
+    access::require(&state.db, &user, found.space_id, "create", "page").await?;
     // The body is one label or a list of labels.
     let items = match request {
         Value::Array(items) => items,
@@ -511,8 +515,14 @@ pub async fn add_labels(
     Ok(Json(WikiCtx::new(&state).labels(found.id).await?))
 }
 
-async fn remove_label_named(state: &AppState, id: &str, name: &str) -> WikiResult<StatusCode> {
-    let found = find_current(state, id).await?;
+async fn remove_label_named(
+    state: &AppState,
+    user: &User,
+    id: &str,
+    name: &str,
+) -> WikiResult<StatusCode> {
+    let found = find_current(state, user, id).await?;
+    access::require(&state.db, user, found.space_id, "create", "page").await?;
     if !labels::remove(&state.db, found.id, &name.to_lowercase()).await? {
         return Err(WikiError::not_found(format!(
             "Label {name} is not on content {id}"
@@ -523,15 +533,15 @@ async fn remove_label_named(state: &AppState, id: &str, name: &str) -> WikiResul
 
 pub async fn remove_label(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id, label)): Path<(String, String)>,
 ) -> WikiResult<StatusCode> {
-    remove_label_named(&state, &id, &label).await
+    remove_label_named(&state, &user, &id, &label).await
 }
 
 pub async fn remove_label_by_query(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     params: Params,
 ) -> WikiResult<StatusCode> {
@@ -539,18 +549,19 @@ pub async fn remove_label_by_query(
         .get("name")
         .ok_or_else(|| WikiError::bad_request("name is required"))?
         .to_string();
-    remove_label_named(&state, &id, &name).await
+    remove_label_named(&state, &user, &id, &name).await
 }
 
 /// `PUT /content/{id}/move/{position}/{targetId}`: `before` or `after` a sibling, or `append`
 /// as the last child of the target.
 pub async fn move_page(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id, position, target)): Path<(String, String, String)>,
 ) -> WikiResult<Json<Value>> {
-    let page = find_current(&state, &id).await?;
-    let target = find_current(&state, &target).await?;
+    let page = find_current(&state, &user, &id).await?;
+    let target = find_current(&state, &user, &target).await?;
+    access::require(&state.db, &user, page.space_id, "create", "page").await?;
     if page.content_type != "page" || target.content_type != "page" {
         return Err(WikiError::bad_request("Only pages can be moved"));
     }

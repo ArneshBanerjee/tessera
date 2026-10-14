@@ -50,7 +50,7 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Sprint reports and burndown, quick filters, Confluence space permissions, issue security levels, notifications, Confluence inline comments, page restrictions, and a rich-text editor, and import of Atlassian backups.
+Sprint reports and burndown, quick filters, issue security levels, notifications, Confluence inline comments, page restrictions, a rich-text editor, and import of Atlassian backups.
 
 ## Compatibility
 
