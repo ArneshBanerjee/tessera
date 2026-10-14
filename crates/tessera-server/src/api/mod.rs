@@ -26,6 +26,7 @@ mod session;
 mod social;
 mod transitions;
 mod users;
+mod workflows;
 mod worklogs;
 
 use axum::extract::DefaultBodyLimit;
@@ -114,6 +115,33 @@ fn jira_routes() -> Router<AppState> {
         .route("/status", get(meta::statuses))
         .route("/status/{id_or_name}", get(meta::status))
         .route("/statuscategory", get(meta::status_categories))
+        .route(
+            "/statuses",
+            post(workflows::create_statuses)
+                .put(workflows::update_statuses)
+                .delete(workflows::delete_statuses),
+        )
+        .route("/statuses/search", get(workflows::search_statuses))
+        .route("/workflow", post(workflows::create_workflow))
+        .route("/workflow/search", get(workflows::search_workflows))
+        .route(
+            "/workflow/{id}",
+            axum::routing::delete(workflows::delete_workflow),
+        )
+        .route(
+            "/workflowscheme",
+            get(workflows::schemes).post(workflows::create_scheme),
+        )
+        .route(
+            "/workflowscheme/project",
+            get(workflows::project_schemes).put(workflows::assign_scheme),
+        )
+        .route(
+            "/workflowscheme/{id}",
+            get(workflows::scheme)
+                .put(workflows::update_scheme)
+                .delete(workflows::delete_scheme),
+        )
         .route("/priority", get(meta::priorities))
         .route("/priority/{id}", get(meta::priority))
         .route("/resolution", get(meta::resolutions))

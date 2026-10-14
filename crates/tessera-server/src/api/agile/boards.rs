@@ -87,7 +87,7 @@ pub async fn create_board(
 ) -> ApiResult<Board> {
     let catalog = Catalog::load(db).await?;
     let status_ids = match project {
-        Some(project) => workflows::statuses(db, project.workflow_id).await?,
+        Some(project) => workflows::project_statuses(db, project.id).await?,
         None => catalog.statuses.iter().map(|s| s.id).collect(),
     };
     let statuses: Vec<(i64, String)> = status_ids

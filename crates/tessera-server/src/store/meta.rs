@@ -150,3 +150,57 @@ pub fn json_id(value: &serde_json::Value) -> Option<i64> {
         _ => None,
     }
 }
+
+pub async fn create_status(
+    db: &SqlitePool,
+    name: &str,
+    description: &str,
+    category_id: i64,
+) -> sqlx::Result<Status> {
+    sqlx::query_as(
+        "INSERT INTO statuses (name, description, category_id) VALUES (?, ?, ?)
+         RETURNING id, name, description, category_id",
+    )
+    .bind(name)
+    .bind(description)
+    .bind(category_id)
+    .fetch_one(db)
+    .await
+}
+
+pub async fn update_status(
+    db: &SqlitePool,
+    id: i64,
+    name: &str,
+    description: &str,
+    category_id: i64,
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE statuses SET name = ?, description = ?, category_id = ? WHERE id = ?")
+        .bind(name)
+        .bind(description)
+        .bind(category_id)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Whether a workflow or an issue uses the status.
+pub async fn status_in_use(db: &SqlitePool, id: i64) -> sqlx::Result<bool> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM workflow_statuses WHERE status_id = ?1)
+              + (SELECT COUNT(*) FROM issues WHERE status_id = ?1)",
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await?;
+    Ok(count > 0)
+}
+
+pub async fn delete_status(db: &SqlitePool, id: i64) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM statuses WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}

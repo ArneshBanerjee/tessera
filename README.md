@@ -20,7 +20,7 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 | Users | `myself`, `user`, `user/search`, `users/search`, `user/assignable/search` |
 | Projects | Create, read, update, delete, `project/search`, `project/{key}/statuses`, project categories |
 | Issues | Create, read, edit, delete, assign, `changelog`, `createmeta`, `editmeta`, the `fields` and `expand` parameters |
-| Workflow | Transitions, with resolution set and cleared as in Jira's simplified workflow |
+| Workflow | Transitions, with resolution set and cleared when entering and leaving done statuses. Custom statuses (`/statuses`), workflows with initial, directed, and global transitions (`/workflow`), and workflow schemes that pick a workflow per issue type (`/workflowscheme`). When a project changes workflows, issues move to a status of the same category, and boards get columns for new statuses. |
 | Comments | Create, read, update, delete, with author checks |
 | Components | Create, read, update, delete (moving issues), issue counts, automatic assignee from component or project lead |
 | Versions | Create, read, update, delete (moving issues), reorder, issue counts, release and archive flags |

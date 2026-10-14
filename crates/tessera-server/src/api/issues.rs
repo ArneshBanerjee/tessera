@@ -586,7 +586,6 @@ pub async fn create(
     let mut ctx = Ctx::new(&state, version).await?;
     let custom = CustomCatalog::load(&state.db).await?;
     let mut fields = IssueFields {
-        status_id: workflows::initial_status(&state.db, project.workflow_id).await?,
         priority_id: ctx.catalog.default_priority(),
         reporter_id: Some(user.id),
         ..IssueFields::default()
@@ -601,6 +600,9 @@ pub async fn create(
         Mode::Create,
     )
     .await?;
+    // New issues start in the initial status of their type's workflow.
+    let workflow = workflows::for_issue_type(&state.db, project.id, fields.issue_type_id).await?;
+    fields.status_id = workflows::initial_status(&state.db, workflow).await?;
     sync_resolution_date(None, &mut fields);
     // No assignee in the request means "automatic": the component or project default.
     if !request.fields.contains_key("assignee") {
@@ -655,6 +657,19 @@ pub async fn save_edit(
     )
     .await?;
     sync_resolution_date(before.resolution_id, &mut after);
+    // A new issue type may follow another workflow, which must have the issue's status.
+    if after.issue_type_id != before.issue_type_id {
+        let workflow = workflows::for_issue_type(&db, project.id, after.issue_type_id).await?;
+        if !workflows::statuses(&db, workflow)
+            .await?
+            .contains(&after.status_id)
+        {
+            return Err(ApiError::field(
+                "issuetype",
+                "The issue's current status is not in the workflow of the new issue type.",
+            ));
+        }
+    }
     let changes = issue_fields::diff(ctx, &custom, &before, &before_custom, &after).await?;
     issues::update(&db, issue.id, author_id, &after, &changes).await?;
     for body in &new_comments {

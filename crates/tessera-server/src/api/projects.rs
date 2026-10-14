@@ -346,27 +346,25 @@ pub async fn statuses(
 ) -> ApiResult<Json<Vec<Value>>> {
     let project = find_visible(&state, &user, &id_or_key).await?;
     let ctx = Ctx::new(&state, version).await?;
-    let status_ids = workflows::statuses(&state.db, project.workflow_id).await?;
-    let statuses: Vec<Value> = status_ids
-        .iter()
-        .filter_map(|id| ctx.catalog.status(*id))
-        .map(|s| ctx.status(s))
-        .collect();
-    Ok(Json(
-        ctx.catalog
-            .issue_types
+    let mut out = Vec::with_capacity(ctx.catalog.issue_types.len());
+    // Each issue type follows its own workflow from the project's workflow scheme.
+    for issue_type in &ctx.catalog.issue_types {
+        let workflow = workflows::for_issue_type(&state.db, project.id, issue_type.id).await?;
+        let statuses: Vec<Value> = workflows::statuses(&state.db, workflow)
+            .await?
             .iter()
-            .map(|t| {
-                json!({
-                    "self": ctx.api_url(&format!("/issuetype/{}", t.id)),
-                    "id": t.id.to_string(),
-                    "name": t.name,
-                    "subtask": t.is_subtask(),
-                    "statuses": statuses,
-                })
-            })
-            .collect(),
-    ))
+            .filter_map(|id| ctx.catalog.status(*id))
+            .map(|s| ctx.status(s))
+            .collect();
+        out.push(json!({
+            "self": ctx.api_url(&format!("/issuetype/{}", issue_type.id)),
+            "id": issue_type.id.to_string(),
+            "name": issue_type.name,
+            "subtask": issue_type.is_subtask(),
+            "statuses": statuses,
+        }));
+    }
+    Ok(Json(out))
 }
 
 /// The board a project template comes with: scrum for scrum templates, kanban for kanban and

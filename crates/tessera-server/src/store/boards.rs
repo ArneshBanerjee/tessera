@@ -122,3 +122,57 @@ pub async fn columns(db: &SqlitePool, board_id: i64) -> sqlx::Result<Vec<Column>
     }
     Ok(result)
 }
+
+/// Every status shown in some column of the board.
+pub async fn mapped_statuses(db: &SqlitePool, board_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(
+        "SELECT s.status_id FROM board_column_statuses s
+         JOIN board_columns c ON c.id = s.column_id WHERE c.board_id = ?",
+    )
+    .bind(board_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Adds a column for one status. With `before_last`, it goes before the last column (where
+/// done work usually is); otherwise it goes at the end.
+pub async fn add_status_column(
+    db: &SqlitePool,
+    board_id: i64,
+    name: &str,
+    status_id: i64,
+    before_last: bool,
+) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    let last: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(position) FROM board_columns WHERE board_id = ?")
+            .bind(board_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let position = match last {
+        Some(last) if before_last => {
+            sqlx::query("UPDATE board_columns SET position = position + 1 WHERE board_id = ? AND position >= ?")
+                .bind(board_id)
+                .bind(last)
+                .execute(&mut *tx)
+                .await?;
+            last
+        }
+        Some(last) => last + 1,
+        None => 0,
+    };
+    let column: i64 = sqlx::query_scalar(
+        "INSERT INTO board_columns (board_id, position, name) VALUES (?, ?, ?) RETURNING id",
+    )
+    .bind(board_id)
+    .bind(position)
+    .bind(name)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO board_column_statuses (column_id, status_id) VALUES (?, ?)")
+        .bind(column)
+        .bind(status_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}

@@ -409,3 +409,39 @@ pub async fn touch(db: &SqlitePool, issue_id: i64) -> sqlx::Result<()> {
         .await?;
     Ok(())
 }
+
+/// Moves the project's issues of one type from one status to another, as when the project
+/// changes workflows. Returns how many issues moved.
+pub async fn move_status(
+    db: &SqlitePool,
+    project_id: i64,
+    issue_type_id: i64,
+    from_status_id: i64,
+    to_status_id: i64,
+) -> sqlx::Result<u64> {
+    let result = sqlx::query(
+        "UPDATE issues SET status_id = ? WHERE project_id = ? AND issue_type_id = ? AND status_id = ?",
+    )
+    .bind(to_status_id)
+    .bind(project_id)
+    .bind(issue_type_id)
+    .bind(from_status_id)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// The statuses that the project's issues of one type are in.
+pub async fn statuses_in_use(
+    db: &SqlitePool,
+    project_id: i64,
+    issue_type_id: i64,
+) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT status_id FROM issues WHERE project_id = ? AND issue_type_id = ? ORDER BY status_id",
+    )
+    .bind(project_id)
+    .bind(issue_type_id)
+    .fetch_all(db)
+    .await
+}

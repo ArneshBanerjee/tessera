@@ -27,8 +27,9 @@ pub async fn transitions_json(
     project: &Project,
     issue: &Issue,
 ) -> ApiResult<Vec<Value>> {
-    let available =
-        workflows::available(&ctx.state.db, project.workflow_id, issue.status_id).await?;
+    let workflow =
+        workflows::for_issue_type(&ctx.state.db, project.id, issue.issue_type_id).await?;
+    let available = workflows::available(&ctx.state.db, workflow, issue.status_id).await?;
     Ok(available
         .iter()
         .filter_map(|t| {
@@ -94,7 +95,8 @@ pub async fn perform(
         .get("id")
         .and_then(json_id)
         .ok_or_else(|| ApiError::bad_request("Missing 'transition' identifier"))?;
-    let available = workflows::available(&state.db, project.workflow_id, issue.status_id).await?;
+    let workflow = workflows::for_issue_type(&state.db, project.id, issue.issue_type_id).await?;
+    let available = workflows::available(&state.db, workflow, issue.status_id).await?;
     let transition = available
         .iter()
         .find(|t| t.id == transition_id)
