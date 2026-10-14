@@ -2,6 +2,7 @@
 
 use super::extract::Json;
 use crate::api::access::{check, find_issue_access, find_issue_as};
+use crate::notify::{self, IssueEvent};
 use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -67,10 +68,12 @@ pub async fn create(
     Json(request): Json<CommentRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let issue = find_issue_as(&state, &user, &id_or_key, "ADD_COMMENTS").await?;
-    let comment =
-        comments::create(&state.db, issue.id, user.id, &parse_body(&request.body)?).await?;
+    let body = parse_body(&request.body)?;
+    let comment = comments::create(&state.db, issue.id, user.id, &body).await?;
     // Commenting makes you a watcher, as with Jira's default autowatch setting.
     social::add(&state.db, List::Watchers, issue.id, user.id).await?;
+    let text = tessera_adf::to_plain_text(&body);
+    notify::issue(&state, &user, &issue, IssueEvent::Commented(&text)).await;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok((
         StatusCode::CREATED,

@@ -2,6 +2,7 @@
 
 use crate::api::access::Access;
 use crate::api::access::find_issue_as;
+use crate::notify::{self, IssueEvent};
 use std::collections::BTreeMap;
 
 use super::extract::Json;
@@ -612,6 +613,7 @@ pub async fn create(
     for body in &new_comments {
         comments::create(&state.db, issue.id, user.id, body).await?;
     }
+    notify::issue(&state, &user, &issue, IssueEvent::Created).await;
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -622,13 +624,14 @@ pub async fn create(
     ))
 }
 
-/// Applies an edit to an issue and records the changes in its history.
+/// Applies an edit to an issue and records the changes in its history. Returns the names of
+/// the fields that changed.
 pub async fn save_edit(
     ctx: &mut Ctx,
     issue: &Issue,
     author_id: i64,
     request: &IssueRequest,
-) -> ApiResult<()> {
+) -> ApiResult<Vec<String>> {
     let db = ctx.state.db.clone();
     let project = projects::by_id(&db, issue.project_id)
         .await?
@@ -658,7 +661,14 @@ pub async fn save_edit(
         comments::create(&db, issue.id, author_id, body).await?;
         social::add(&db, List::Watchers, issue.id, author_id).await?;
     }
-    Ok(())
+    Ok(changes.iter().map(|c| c.field.clone()).collect())
+}
+
+/// The issue as it is now, for notifications after a change.
+async fn reload(state: &AppState, issue: &Issue) -> ApiResult<Issue> {
+    Ok(issues::by_id(&state.db, issue.id)
+        .await?
+        .unwrap_or_else(|| issue.clone()))
 }
 
 pub async fn edit(
@@ -670,7 +680,15 @@ pub async fn edit(
 ) -> ApiResult<StatusCode> {
     let issue = find_issue_as(&state, &user, &id_or_key, "EDIT_ISSUES").await?;
     let mut ctx = Ctx::new(&state, version).await?;
-    save_edit(&mut ctx, &issue, user.id, &request).await?;
+    let changed = save_edit(&mut ctx, &issue, user.id, &request).await?;
+    if !changed.is_empty() {
+        let event = if changed == ["assignee"] {
+            IssueEvent::Assigned
+        } else {
+            IssueEvent::Updated(&changed)
+        };
+        notify::issue(&state, &user, &reload(&state, &issue).await?, event).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -707,6 +725,8 @@ pub async fn delete(
             "The issue has subtasks. Use the parameter deleteSubtasks=true to delete the issue and its subtasks.",
         ));
     }
+    // Tell people before the issue and its watchers are gone.
+    notify::issue(&state, &user, &issue, IssueEvent::Deleted).await;
     for subtask in subtasks {
         issues::delete(&state.db, subtask.id).await?;
     }
@@ -728,7 +748,18 @@ pub async fn assign(
         fields: Map::from_iter([("assignee".to_string(), assignee)]),
         update: Map::new(),
     };
-    save_edit(&mut ctx, &issue, user.id, &request).await?;
+    if !save_edit(&mut ctx, &issue, user.id, &request)
+        .await?
+        .is_empty()
+    {
+        notify::issue(
+            &state,
+            &user,
+            &reload(&state, &issue).await?,
+            IssueEvent::Assigned,
+        )
+        .await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

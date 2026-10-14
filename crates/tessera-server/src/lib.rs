@@ -8,6 +8,8 @@ pub mod confluence;
 pub mod db;
 pub mod error;
 pub mod jql;
+pub mod mail;
+pub mod notify;
 pub mod store;
 pub mod time;
 mod web;
@@ -25,6 +27,8 @@ pub struct AppState {
     pub base_url: String,
     /// Where files such as attachments are stored.
     pub data_dir: PathBuf,
+    /// Whether outgoing email is set up. Without it, no notifications are queued.
+    pub mail_enabled: bool,
 }
 
 /// Builds the whole HTTP application.

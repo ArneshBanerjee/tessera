@@ -10,6 +10,7 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/ArneshBanerjee/tessera"
 
 [workspace.dependencies]
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "rustls-platform-verifier", "hostname", "pool"] }
 percent-encoding = "2.3.2"
 mime_guess = "2.0.5"
 scraper = { version = "0.27.0", default-features = false }

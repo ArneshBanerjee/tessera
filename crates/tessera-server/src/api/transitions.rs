@@ -2,6 +2,7 @@
 
 use super::extract::Json;
 use crate::api::access::find_issue_as;
+use crate::notify::{self, IssueEvent};
 use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -129,5 +130,12 @@ pub async fn perform(
         };
         save_edit(&mut ctx, &moved, user.id, &edit).await?;
     }
+    let status = ctx
+        .catalog
+        .status(transition.to_status_id)
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+    let current = find_issue(&state, &issue.id.to_string()).await?;
+    notify::issue(&state, &user, &current, IssueEvent::Transitioned(&status)).await;
     Ok(StatusCode::NO_CONTENT)
 }

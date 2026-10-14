@@ -48,6 +48,7 @@ impl TestApp {
             db: pool,
             base_url: BASE.into(),
             data_dir,
+            mail_enabled: true,
         };
         Self {
             router: app(state.clone()),

@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 
 use clap::{Parser, Subcommand};
+use tessera_server::mail::Sender;
 use tessera_server::store::users::{self, NewUser};
 use tessera_server::{AppState, app, auth, db};
 use tracing_subscriber::EnvFilter;
@@ -44,6 +45,16 @@ enum Command {
         /// Public URL of the server. Defaults to http://<addr>.
         #[arg(long, env = "TESSERA_BASE_URL")]
         base_url: Option<String>,
+        /// SMTP server for notifications, such as smtp://user:password@mail.example.com:587.
+        #[arg(long, env = "TESSERA_SMTP_URL")]
+        smtp_url: Option<String>,
+        /// The From address of notifications.
+        #[arg(
+            long,
+            env = "TESSERA_MAIL_FROM",
+            default_value = "Tessera <tessera@localhost>"
+        )]
+        mail_from: String,
     },
     /// Create a user.
     CreateUser {
@@ -80,9 +91,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|a| a.parse().ok())
             .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 8080))),
         base_url: std::env::var("TESSERA_BASE_URL").ok(),
+        smtp_url: std::env::var("TESSERA_SMTP_URL").ok(),
+        mail_from: std::env::var("TESSERA_MAIL_FROM")
+            .unwrap_or_else(|_| "Tessera <tessera@localhost>".into()),
     }) {
-        Command::Serve { addr, base_url } => {
+        Command::Serve {
+            addr,
+            base_url,
+            smtp_url,
+            mail_from,
+        } => {
             bootstrap_admin(&pool).await?;
+            let mail_enabled = match smtp_url {
+                Some(url) => {
+                    let sender = Sender::new(&url, &mail_from)?;
+                    tokio::spawn(sender.run(pool.clone()));
+                    tracing::info!("Sending notifications as {mail_from}");
+                    true
+                }
+                None => {
+                    tracing::info!("No SMTP server set; email notifications are off");
+                    false
+                }
+            };
             let base_url = base_url
                 .unwrap_or_else(|| format!("http://{addr}"))
                 .trim_end_matches('/')
@@ -96,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     db: pool,
                     base_url,
                     data_dir,
+                    mail_enabled,
                 }),
             )
             .with_graceful_shutdown(async {

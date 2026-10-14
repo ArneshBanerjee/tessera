@@ -376,6 +376,7 @@ async fn set_sprint(
         },
     )
     .await
+    .map(|_| ())
 }
 
 /// Sets or clears the parent epic of an issue through a normal edit.
@@ -401,6 +402,7 @@ async fn set_epic(
         },
     )
     .await
+    .map(|_| ())
 }
 
 /// `{"issues": [...], "rankBeforeIssue": ..., "rankAfterIssue": ...}`.

@@ -40,6 +40,8 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 
 Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
+**Notifications**: with an SMTP server set, Tessera emails the assignee, reporter, and watchers when an issue is created, edited, assigned, transitioned, commented on, or deleted, as Jira's default notification scheme does. Nobody gets mail about their own changes or about issues they cannot see.
+
 **Web app**: log in, your work, projects (create from scrum, kanban, or task tracking templates), the backlog (quick create, sprints, drag issues into sprints, start sprint), the board (drag cards to change status, complete sprint), the issue view (edit summary and description in Markdown, transitions, assignee, reporter, priority, labels, due date, story points, subtasks, issue links, attachments, comments, history, watch, delete), JQL search with saved filters and favourites, and quick search. For Confluence: spaces, a page tree, pages with their history and old versions (with restore), a Markdown editor that saves pages as ADF (with images from attachments), attachments, labels, threaded comments, and space settings with a permissions grid. Your profile page manages your name, time zone, password, and API tokens. Project settings manage details and who holds each project role, and administrators manage users and groups. The server serves the app from its own binary.
 
 **Confluence** (`/wiki/rest/api`, the v1 API): spaces (with home pages), pages, blog posts, and comments with replies. Every version is kept: updates must name the next version number (409 otherwise, as in Confluence), old versions can be read and restored. The page tree: children, descendants, ancestors, and moving pages before, after, or under others. Attachments with versions (upload, new versions, download, images in pages), trash and purge, labels, history, and content body conversion. Bodies use the storage format; the `view` format is sanitized HTML. Errors use Confluence's format.
@@ -50,7 +52,7 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Sprint reports and burndown, quick filters, issue security levels, notifications, Confluence inline comments, page restrictions, a rich-text editor, and import of Atlassian backups.
+Sprint reports and burndown, quick filters, issue security levels, Confluence notifications, Confluence inline comments, page restrictions, a rich-text editor, and import of Atlassian backups.
 
 ## Compatibility
 
@@ -76,6 +78,10 @@ The server listens on `127.0.0.1:8080` and stores data in `tessera.db`. Open `ht
 | Listen address | `--addr` | `TESSERA_ADDR` | `127.0.0.1:8080` |
 | Public URL | `--base-url` | `TESSERA_BASE_URL` | `http://<addr>` |
 | Data directory (attachments) | `--data-dir` | `TESSERA_DATA_DIR` | `tessera-data` |
+| SMTP server for notifications | `--smtp-url` | `TESSERA_SMTP_URL` | none (no email) |
+| Sender of notifications | `--mail-from` | `TESSERA_MAIL_FROM` | `Tessera <tessera@localhost>` |
+
+SMTP URLs look like `smtp://user:password@mail.example.com:587` (STARTTLS), `smtps://...:465` (TLS), or `smtp+plain://localhost:1025` (no TLS, for a local relay).
 
 On a fresh database, `TESSERA_ADMIN_EMAIL` and `TESSERA_ADMIN_PASSWORD` create the first administrator at startup.
 
