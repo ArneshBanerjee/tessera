@@ -189,6 +189,7 @@ async fn apply(
                     ));
                 }
                 sprint.state = "active".into();
+                sprint.activated_at = Some(now_ms());
             }
             ("active", "closed") => {
                 sprint.state = "closed".into();

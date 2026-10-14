@@ -10,6 +10,7 @@ pub mod error;
 pub mod jql;
 pub mod mail;
 pub mod notify;
+pub mod reports;
 pub mod store;
 pub mod time;
 mod web;

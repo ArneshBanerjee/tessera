@@ -84,7 +84,14 @@ pub fn router() -> Router<AppState> {
                 .delete(session::logout),
         )
         .nest("/rest/agile/1.0", agile::router())
-        .nest("/rest/tessera/1.0", account::router())
+        .nest(
+            "/rest/tessera/1.0",
+            account::router().merge(agile::reports::tessera_router()),
+        )
+        .nest(
+            "/rest/greenhopper/1.0",
+            agile::reports::greenhopper_router(),
+        )
         .nest(
             "/rest/api/2",
             jira_routes().layer(Extension(ApiVersion::V2)),

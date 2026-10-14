@@ -19,6 +19,8 @@ pub struct Sprint {
     pub complete_date: Option<i64>,
     pub origin_board_id: Option<i64>,
     pub sequence: i64,
+    /// When the sprint was started, as opposed to its planned start date.
+    pub activated_at: Option<i64>,
 }
 
 impl Sprint {
@@ -29,7 +31,7 @@ impl Sprint {
 
 macro_rules! columns {
     () => {
-        "id, name, state, goal, start_date, end_date, complete_date, origin_board_id, sequence"
+        "id, name, state, goal, start_date, end_date, complete_date, origin_board_id, sequence, activated_at"
     };
 }
 
@@ -60,7 +62,8 @@ pub async fn create(
 /// Saves name, goal, dates, and state.
 pub async fn save(db: &SqlitePool, sprint: &Sprint) -> sqlx::Result<()> {
     sqlx::query(
-        "UPDATE sprints SET name = ?, state = ?, goal = ?, start_date = ?, end_date = ?, complete_date = ?
+        "UPDATE sprints SET name = ?, state = ?, goal = ?, start_date = ?, end_date = ?, complete_date = ?,
+             activated_at = ?
          WHERE id = ?",
     )
     .bind(&sprint.name)
@@ -69,6 +72,7 @@ pub async fn save(db: &SqlitePool, sprint: &Sprint) -> sqlx::Result<()> {
     .bind(sprint.start_date)
     .bind(sprint.end_date)
     .bind(sprint.complete_date)
+    .bind(sprint.activated_at)
     .bind(sprint.id)
     .execute(db)
     .await?;
@@ -137,4 +141,30 @@ pub async fn of_issue(db: &SqlitePool, issue_id: i64) -> sqlx::Result<Vec<Sprint
     .bind(issue_id)
     .fetch_all(db)
     .await
+}
+
+/// Ids of every issue that was ever in the sprint: members now, and issues whose history
+/// moved them into or out of it.
+pub async fn issue_ids_ever_in(db: &SqlitePool, sprint_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(
+        "SELECT issue_id FROM issue_sprints WHERE sprint_id = ?1
+         UNION
+         SELECT c.issue_id FROM changelogs c JOIN changelog_items i ON i.changelog_id = c.id
+         WHERE i.field = 'Sprint' AND (i.from_value = CAST(?1 AS TEXT) OR i.to_value = CAST(?1 AS TEXT))
+         ORDER BY 1",
+    )
+    .bind(sprint_id)
+    .fetch_all(db)
+    .await
+}
+
+pub async fn is_member(db: &SqlitePool, sprint_id: i64, issue_id: i64) -> sqlx::Result<bool> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM issue_sprints WHERE sprint_id = ? AND issue_id = ?",
+    )
+    .bind(sprint_id)
+    .bind(issue_id)
+    .fetch_one(db)
+    .await?;
+    Ok(count > 0)
 }

@@ -8,6 +8,7 @@
 mod boards;
 mod epics;
 mod issues;
+pub mod reports;
 mod sprints;
 
 pub use boards::create_board;
@@ -126,6 +127,9 @@ pub fn sprint_json(ctx: &Ctx, sprint: &Sprint) -> Value {
     }
     if let Some(complete) = date(sprint.complete_date) {
         value["completeDate"] = json!(complete);
+    }
+    if let Some(activated) = date(sprint.activated_at) {
+        value["activatedDate"] = json!(activated);
     }
     if let Some(board) = sprint.origin_board_id {
         value["originBoardId"] = json!(board);

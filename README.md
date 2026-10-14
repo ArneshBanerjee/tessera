@@ -34,7 +34,7 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 | Permissions | Permission schemes with grants to everyone, groups, users, project roles, the project lead, reporters, and assignees; project roles and their members; groups; `mypermissions`. Projects a user cannot browse are hidden from every endpoint and from search, as in Jira. |
 | Metadata | Issue types, statuses, status categories, priorities, resolutions, notification and security schemes |
 
-**Jira Software** (`/rest/agile/1.0`): scrum and kanban boards with columns, board issues and backlog, sprints (create, start, complete, delete, swap, move issues), global ranking, epics (issues, colors, done, rank), estimation, and board and sprint properties. Software projects created from scrum, kanban, or basic templates get a board, as in Jira. Sprint, Rank, and Story point estimate are built-in fields.
+**Jira Software** (`/rest/agile/1.0`): scrum and kanban boards with columns, board issues and backlog, sprints (create, start, complete, delete, swap, move issues), global ranking, epics (issues, colors, done, rank), estimation, and board and sprint properties. Software projects created from scrum, kanban, or basic templates get a board, as in Jira. Reports rebuild each sprint from issue history: the sprint report (completed, not completed, removed, and added issues) and velocity at `/rest/greenhopper/1.0/rapid/charts`, and a burndown series at `/rest/tessera/1.0/reports/burndown`. Sprint, Rank, and Story point estimate are built-in fields.
 
 **JQL** follows Jira's rules: `=`, `!=`, `IN`, `NOT IN`, `IS EMPTY`, `~`, comparisons, `WAS`, `WAS IN`, `WAS NOT`, `CHANGED` with `FROM`, `TO`, `BY`, `AFTER`, `BEFORE`, `ON`, `DURING`, relative dates (`-7d`), date functions (`startOfWeek(-1)`, `endOfMonth()`), `currentUser()`, custom fields by name or `cf[id]`, and `ORDER BY`. It also searches components, fix and affected versions (with `releasedVersions()`, `unreleasedVersions()`, `latestReleasedVersion()`, `earliestUnreleasedVersion()`), watchers and voters (`watchedIssues()`, `votedIssues()`), links (`linkedIssues()`, `issueLinkType`), time tracking (`timespent > 4h`), worklogs, attachments, sprints (`openSprints()`, `closedSprints()`, `futureSprints()`), saved filters, `"Epic Link"`, `standardIssueTypes()`, and `ORDER BY Rank`. Errors use Jira's wording.
 
@@ -52,7 +52,7 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Sprint reports and burndown, quick filters, issue security levels, in-app notifications, Confluence inline comments, page restrictions, a rich-text editor, and import of Atlassian backups.
+Quick filters, dashboards, issue security levels, in-app notifications, Confluence inline comments, page restrictions, a rich-text editor, and import of Atlassian backups.
 
 ## Compatibility
 
