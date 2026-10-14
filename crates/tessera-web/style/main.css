@@ -338,3 +338,12 @@ textarea.input { resize: vertical; }
 .permission-grid th { white-space: nowrap; font-size: 11px; }
 .check-cell { text-align: center; }
 .add-subjects { display: flex; flex-wrap: wrap; gap: 0 16px; margin-top: 8px; }
+
+/* Administration */
+.admin-tabs { margin-bottom: 16px; }
+.admin-tabs .tab { text-decoration: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.check-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 12px; font-weight: 400 !important; flex-direction: row !important; }
+.workflow-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px; }
+.workflow-card summary { cursor: pointer; }
+.workflow-card table { margin-top: 10px; }

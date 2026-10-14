@@ -43,6 +43,7 @@ pub fn Users() -> impl IntoView {
     };
     view! {
         <div class="page">
+            <super::admin_workflows::AdminTabs current="Users and groups"/>
             <header class="page-header">
                 <h1>"Users"</h1>
                 <button class="button primary" on:click=move |_| creating.set(true)>"Create user"</button>

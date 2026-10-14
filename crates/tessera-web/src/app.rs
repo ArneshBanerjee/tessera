@@ -11,8 +11,8 @@ use crate::api;
 use crate::components::{Avatar, ErrorText};
 use crate::model::User;
 use crate::pages::{
-    admin, board, create, filters, issue, project_settings, projects, search, settings, wiki,
-    your_work,
+    admin, admin_workflows, board, create, filters, issue, project_settings, projects, search,
+    settings, wiki, your_work,
 };
 
 /// Shared state for the signed-in user.
@@ -125,6 +125,7 @@ fn Shell(me: User) -> impl IntoView {
                 <Route path=path!("/filters") view=filters::FiltersPage/>
                 <Route path=path!("/settings") view=settings::Settings/>
                 <Route path=path!("/admin/users") view=admin::Users/>
+                <Route path=path!("/admin/workflows") view=admin_workflows::Workflows/>
                 <Route path=path!("/wiki") view=wiki::Spaces/>
                 <ParentRoute path=path!("/wiki/spaces/:key") view=wiki::SpaceLayout>
                     <Route path=path!("") view=wiki::SpaceHome/>

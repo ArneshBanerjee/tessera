@@ -40,6 +40,9 @@ pub fn ProjectSettings() -> impl IntoView {
             <header class="page-header"><h1>"Project settings"</h1></header>
             <Details/>
             <People/>
+            <Show when=move || use_session().admin.get()>
+                <WorkflowScheme/>
+            </Show>
         </div>
     }
 }
@@ -205,6 +208,84 @@ fn People() -> impl IntoView {
                     }).collect_view()}
                 </tbody>
             </table>
+        </section>
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+struct SchemeRef {
+    id: i64,
+    name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+struct SchemePage {
+    values: Vec<SchemeRef>,
+}
+
+/// The project's workflow scheme. Changing it moves issues to statuses of the new workflows.
+#[component]
+fn WorkflowScheme() -> impl IntoView {
+    let session = use_session();
+    let project = use_project();
+    let error = RwSignal::new(None::<String>);
+    let loaded = LocalResource::new(move || {
+        let key = project.key.get();
+        session.changes.track();
+        async move {
+            let found: Value = api::get(&format!("{}/project/{key}", api::CORE))
+                .await
+                .unwrap_or_default();
+            let id = found["id"].as_str().unwrap_or_default().to_string();
+            let all: SchemePage = api::get(&format!("{}/workflowscheme", api::CORE))
+                .await
+                .unwrap_or_default();
+            let current: Value = api::get(&format!(
+                "{}/workflowscheme/project?projectId={id}",
+                api::CORE
+            ))
+            .await
+            .unwrap_or_default();
+            let current_id = current["values"][0]["workflowScheme"]["id"]
+                .as_i64()
+                .unwrap_or_default();
+            (id, all.values, current_id)
+        }
+    });
+    let change = move |scheme: String| {
+        let Some((project_id, _, _)) = loaded.get_untracked() else {
+            return;
+        };
+        spawn_local(async move {
+            let body = json!({ "workflowSchemeId": scheme, "projectId": project_id });
+            match api::request(
+                gloo_net::http::Method::PUT,
+                &format!("{}/workflowscheme/project", api::CORE),
+                Some(&body),
+            )
+            .await
+            {
+                Ok(_) => {
+                    error.set(None);
+                    session.changed();
+                }
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    view! {
+        <section class="settings-card">
+            <h2>"Workflow"</h2>
+            <p class="muted small">"Issues in a status the new workflow lacks move to a status of the same kind."</p>
+            <select class="select" on:change:target=move |ev| change(ev.target().value())>
+                {move || loaded.get().map(|(_, all, current)| all.into_iter().map(|s| {
+                    let selected = s.id == current;
+                    view! { <option value=s.id.to_string() selected=selected>{s.name}</option> }
+                }).collect_view())}
+            </select>
+            <ErrorText error=error/>
         </section>
     }
 }
