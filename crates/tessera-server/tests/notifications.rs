@@ -124,3 +124,77 @@ async fn people_who_cannot_see_the_issue_get_no_mail() {
     .await;
     assert!(outbox(&app).await.is_empty());
 }
+
+#[tokio::test]
+async fn confluence_watchers_hear_about_edits_and_comments() {
+    let app = TestApp::new().await;
+    let wiki = "/wiki/rest/api";
+    app.post(
+        &format!("{wiki}/space"),
+        json!({ "key": "DOCS", "name": "Docs" }),
+    )
+    .await;
+    let (_, page) = app
+        .post(
+            &format!("{wiki}/content"),
+            json!({ "type": "page", "title": "Guide", "space": { "key": "DOCS" } }),
+        )
+        .await;
+    let page_id = page["id"].as_str().unwrap().to_string();
+    let (dev, _) = app.user("dev@tessera.test", "Dev").await;
+
+    // The dev watches the page; the admin wrote it and watches it already.
+    let (status, _) = app
+        .request(
+            Method::POST,
+            &format!("{wiki}/user/watch/content/{page_id}"),
+            Some(&dev),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, watching) = app
+        .request(
+            Method::GET,
+            &format!("{wiki}/user/watch/content/{page_id}"),
+            Some(&dev),
+            None,
+        )
+        .await;
+    assert_eq!(watching["watching"], true);
+    clear(&app).await;
+
+    app.put(
+        &format!("{wiki}/content/{page_id}"),
+        json!({ "type": "page", "title": "Guide", "version": { "number": 2 }, "body": { "storage": { "value": "<p>New</p>", "representation": "storage" } } }),
+    )
+    .await;
+    let mail = outbox(&app).await;
+    assert_eq!(mail.len(), 1, "only the dev; the admin made the change");
+    assert_eq!(mail[0].0, "dev@tessera.test");
+    assert_eq!(mail[0].1, "[Tessera] Docs > Guide");
+    assert!(mail[0].2.contains("Ada Admin edited Guide"));
+    clear(&app).await;
+
+    // Minor edits notify nobody.
+    app.put(
+        &format!("{wiki}/content/{page_id}"),
+        json!({ "type": "page", "title": "Guide", "version": { "number": 3, "minorEdit": true } }),
+    )
+    .await;
+    assert!(outbox(&app).await.is_empty());
+
+    // The dev's comment reaches the admin, who watches what they created.
+    app.request(
+        Method::POST,
+        &format!("{wiki}/content"),
+        Some(&dev),
+        Some(json!({ "type": "comment", "container": { "id": page_id }, "body": { "storage": { "value": "<p>Looks right</p>", "representation": "storage" } } })),
+    )
+    .await;
+    let mail = outbox(&app).await;
+    assert_eq!(mail.len(), 1);
+    assert_eq!(mail[0].0, "admin@tessera.test");
+    assert!(mail[0].2.contains("Dev commented on Guide"));
+    assert!(mail[0].2.contains("Looks right"));
+}

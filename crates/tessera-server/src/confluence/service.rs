@@ -9,12 +9,14 @@ use sqlx::SqlitePool;
 use super::access;
 use super::error::{WikiError, WikiResult};
 use crate::AppState;
+use crate::notify::{self, WikiEvent};
 use crate::store::attachments::SaveError;
 use crate::store::content::{self, Content, Edit, NewContent};
 use crate::store::space_permissions;
 use crate::store::spaces::{self, NewSpace, Space};
 use crate::store::users::{self, User};
 use crate::store::wiki_files::{self, FileVersion};
+use crate::store::wiki_watchers::{self, Target};
 use crate::time::now_ms;
 
 /// An id given as a JSON string or number.
@@ -293,7 +295,7 @@ pub async fn create_page(state: &AppState, user: &User, page: NewPage<'_>) -> Wi
     if page.status == "current" {
         check_title(state, page.space.id, page.kind, page.title, None).await?;
     }
-    Ok(content::create(
+    let created = content::create(
         &state.db,
         &NewContent {
             content_type: page.kind,
@@ -307,7 +309,13 @@ pub async fn create_page(state: &AppState, user: &User, page: NewPage<'_>) -> Wi
             now: now_ms(),
         },
     )
-    .await?)
+    .await?;
+    // You watch what you create, as with Confluence's default setting.
+    wiki_watchers::watch(&state.db, Target::Content(created.id), user.id).await?;
+    if created.status == "current" {
+        notify::wiki(state, user, &created, WikiEvent::Created).await;
+    }
+    Ok(created)
 }
 
 /// Adds a comment to a page or blog post, optionally as a reply to another comment on it.
@@ -334,7 +342,7 @@ pub async fn create_comment(
         return Err(WikiError::bad_request("Comment body cannot be empty"));
     }
     access::require(&state.db, user, container.space_id, "create", "comment").await?;
-    Ok(content::create(
+    let comment = content::create(
         &state.db,
         &NewContent {
             content_type: "comment",
@@ -348,7 +356,11 @@ pub async fn create_comment(
             now: now_ms(),
         },
     )
-    .await?)
+    .await?;
+    let text = content::plain_text(body);
+    notify::wiki(state, user, container, WikiEvent::Commented(&text)).await;
+    wiki_watchers::watch(&state.db, Target::Content(container.id), user.id).await?;
+    Ok(comment)
 }
 
 /// Where an edited page goes in the tree.
@@ -416,7 +428,7 @@ pub async fn save(
         Parent::Keep => found.parent_id,
     };
     let body = save.body.unwrap_or_else(|| found.body.clone());
-    Ok(content::update(
+    let updated = content::update(
         &state.db,
         found,
         &Edit {
@@ -430,7 +442,15 @@ pub async fn save(
             minor_edit: save.minor_edit,
         },
     )
-    .await?)
+    .await?;
+    // Editors watch what they edit. Minor edits notify nobody, as in Confluence.
+    if matches!(updated.content_type.as_str(), "page" | "blogpost") && updated.status == "current" {
+        wiki_watchers::watch(&state.db, Target::Content(updated.id), user.id).await?;
+        if !save.minor_edit {
+            notify::wiki(state, user, &updated, WikiEvent::Updated).await;
+        }
+    }
+    Ok(updated)
 }
 
 /// Moves current content to the trash, or deletes it for good when `purge` is set and it is

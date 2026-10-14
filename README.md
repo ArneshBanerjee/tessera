@@ -40,7 +40,7 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 
 Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
-**Notifications**: with an SMTP server set, Tessera emails the assignee, reporter, and watchers when an issue is created, edited, assigned, transitioned, commented on, or deleted, as Jira's default notification scheme does. Nobody gets mail about their own changes or about issues they cannot see.
+**Notifications**: with an SMTP server set, Tessera emails the assignee, reporter, and watchers when an issue is created, edited, assigned, transitioned, commented on, or deleted, as Jira's default notification scheme does. For Confluence, the watchers of a page and of its space hear about new pages, edits (not minor edits), and comments; you watch pages you create, edit, or comment on (`/user/watch/content` and `/user/watch/space` manage watching). Nobody gets mail about their own changes or about things they cannot see.
 
 **Web app**: log in, your work, projects (create from scrum, kanban, or task tracking templates), the backlog (quick create, sprints, drag issues into sprints, start sprint), the board (drag cards to change status, complete sprint), the issue view (edit summary and description in Markdown, transitions, assignee, reporter, priority, labels, due date, story points, subtasks, issue links, attachments, comments, history, watch, delete), JQL search with saved filters and favourites, and quick search. For Confluence: spaces, a page tree, pages with their history and old versions (with restore), a Markdown editor that saves pages as ADF (with images from attachments), attachments, labels, threaded comments, and space settings with a permissions grid. Your profile page manages your name, time zone, password, and API tokens. Project settings manage details and who holds each project role, and administrators manage users and groups. The server serves the app from its own binary.
 
@@ -52,7 +52,7 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Sprint reports and burndown, quick filters, issue security levels, Confluence notifications, Confluence inline comments, page restrictions, a rich-text editor, and import of Atlassian backups.
+Sprint reports and burndown, quick filters, issue security levels, in-app notifications, Confluence inline comments, page restrictions, a rich-text editor, and import of Atlassian backups.
 
 ## Compatibility
 

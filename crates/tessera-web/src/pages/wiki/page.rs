@@ -78,6 +78,7 @@ fn PageBody(content: WikiContent, old: bool) -> impl IntoView {
                 <A href=edit attr:class="button primary">"Edit"</A>
                 <A href=child attr:class="button">"Create child page"</A>
                 <A href=history attr:class="button subtle">"History"</A>
+                <WatchPage id=id.clone()/>
                 <DeletePage id=id.clone()/>
             </div>
             <p class="byline muted small">
@@ -121,6 +122,35 @@ fn OldVersionBanner(id: String, number: i64) -> impl IntoView {
             <button class="button small" on:click=restore>"Restore this version"</button>
             <ErrorText error=error/>
         </div>
+    }
+}
+
+/// Watching a page sends you email when it changes or gets comments.
+#[component]
+fn WatchPage(id: String) -> impl IntoView {
+    let path = StoredValue::new(format!("{}/user/watch/content/{id}", api::WIKI));
+    let watching = RwSignal::new(false);
+    spawn_local(async move {
+        if let Ok(status) = api::get::<Value>(&path.get_value()).await {
+            watching.set(status["watching"].as_bool().unwrap_or(false));
+        }
+    });
+    let toggle = move |_| {
+        let method = if watching.get() {
+            gloo_net::http::Method::DELETE
+        } else {
+            gloo_net::http::Method::POST
+        };
+        spawn_local(async move {
+            if api::request(method, &path.get_value(), None).await.is_ok() {
+                watching.update(|w| *w = !*w);
+            }
+        });
+    };
+    view! {
+        <button class="button subtle" on:click=toggle>
+            {move || if watching.get() { "Watching" } else { "Watch" }}
+        </button>
     }
 }
 

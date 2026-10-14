@@ -27,5 +27,6 @@ pub mod sprints;
 pub mod users;
 pub mod versions;
 pub mod wiki_files;
+pub mod wiki_watchers;
 pub mod workflows;
 pub mod worklogs;

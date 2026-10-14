@@ -13,6 +13,7 @@ mod search;
 pub mod service;
 mod spaces;
 mod v2;
+mod watch;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -100,6 +101,18 @@ fn v1() -> Router<AppState> {
             axum::routing::put(content::move_page),
         )
         .route("/search", get(search::search))
+        .route(
+            "/user/watch/content/{id}",
+            get(watch::content_status)
+                .post(watch::watch_content)
+                .delete(watch::unwatch_content),
+        )
+        .route(
+            "/user/watch/space/{key}",
+            get(watch::space_status)
+                .post(watch::watch_space)
+                .delete(watch::unwatch_space),
+        )
         .route("/user/current", get(current_user))
         .route("/user", get(user))
         .route("/settings/systemInfo", get(system_info))
