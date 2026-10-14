@@ -1,6 +1,7 @@
 //! Watchers and votes: `/issue/{idOrKey}/watchers` and `/issue/{idOrKey}/votes`.
 
 use super::extract::Json;
+use crate::api::access::{find_issue_access, find_issue_as};
 use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -9,7 +10,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::ApiVersion;
-use super::issues::find_issue;
 use super::render::Ctx;
 use crate::AppState;
 use crate::auth::CurrentUser;
@@ -55,7 +55,7 @@ pub async fn watchers(
     CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "VIEW_VOTERS_AND_WATCHERS").await?;
     let mut ctx = Ctx::new(&state, version).await?.viewed_by(user.id);
     let mut value = watches_json(&ctx, &issue).await?;
     let ids = social::members(&state.db, List::Watchers, issue.id).await?;
@@ -64,14 +64,14 @@ pub async fn watchers(
 }
 
 /// Adds a watcher. The body is a JSON string with an account id; an empty body means the
-/// caller. Only site administrators may add someone else.
+/// caller. Adding someone else needs the Manage Watchers permission.
 pub async fn add_watcher(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     body: Bytes,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let (issue, access) = find_issue_access(&state, &user, &id_or_key).await?;
     let target = if body.iter().all(u8::is_ascii_whitespace) {
         user.clone()
     } else {
@@ -87,7 +87,8 @@ pub async fn add_watcher(
                 ))
             })?
     };
-    if target.id != user.id && !user.is_admin {
+    // Anyone may watch; only holders of Manage Watchers change the list for others.
+    if target.id != user.id && !access.can_on("MANAGE_WATCHERS", Some(&issue)) {
         return Err(ApiError::forbidden(
             "You do not have the permission to manage the watcher list.",
         ));
@@ -108,7 +109,7 @@ pub async fn remove_watcher(
     Path(id_or_key): Path<String>,
     Query(query): Query<WatcherQuery>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let (issue, access) = find_issue_access(&state, &user, &id_or_key).await?;
     let target = match query.account_id {
         Some(account_id) => users::by_account_id(&state.db, &account_id)
             .await?
@@ -119,7 +120,8 @@ pub async fn remove_watcher(
             })?,
         None => user.clone(),
     };
-    if target.id != user.id && !user.is_admin {
+    // Anyone may watch; only holders of Manage Watchers change the list for others.
+    if target.id != user.id && !access.can_on("MANAGE_WATCHERS", Some(&issue)) {
         return Err(ApiError::forbidden(
             "You do not have the permission to manage the watcher list.",
         ));
@@ -134,7 +136,7 @@ pub async fn votes(
     CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "VIEW_VOTERS_AND_WATCHERS").await?;
     let mut ctx = Ctx::new(&state, version).await?.viewed_by(user.id);
     let mut value = votes_json(&ctx, &issue).await?;
     let ids = social::members(&state.db, List::Votes, issue.id).await?;
@@ -149,7 +151,7 @@ pub async fn add_vote(
     CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     if issue.reporter_id == Some(user.id) {
         return Err(ApiError::bad_request(
             "You cannot vote for an issue you have reported.",
@@ -169,7 +171,7 @@ pub async fn remove_vote(
     CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     social::remove(&state.db, List::Votes, issue.id, user.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

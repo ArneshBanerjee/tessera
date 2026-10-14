@@ -1,6 +1,7 @@
 //! Workflow transitions: `GET` and `POST /issue/{idOrKey}/transitions`.
 
 use super::extract::Json;
+use crate::api::access::find_issue_as;
 use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -49,10 +50,10 @@ pub async fn transitions_json(
 pub async fn list(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let project = projects::by_id(&state.db, issue.project_id)
         .await?
         .expect("issue has a project");
@@ -83,7 +84,7 @@ pub async fn perform(
     Path(id_or_key): Path<String>,
     Json(request): Json<TransitionRequest>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "TRANSITION_ISSUES").await?;
     let project = projects::by_id(&state.db, issue.project_id)
         .await?
         .expect("issue has a project");

@@ -1,5 +1,6 @@
 //! Agile issue operations: the Agile view of an issue, ranking, estimation, and the backlog.
 
+use crate::api::access::find_issue_as;
 use crate::api::extract::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -11,7 +12,7 @@ use super::{MoveRequest, agile_issue_json, rank_relative, requested_issues, set_
 use crate::AppState;
 use crate::api::ApiVersion;
 use crate::api::issue_fields::CustomCatalog;
-use crate::api::issues::{IssueRequest, find_issue, save_edit};
+use crate::api::issues::{IssueRequest, save_edit};
 use crate::api::render::Ctx;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
@@ -24,7 +25,7 @@ pub async fn get(
     CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let mut ctx = Ctx::new(&state, ApiVersion::V2).await?.viewed_by(user.id);
     let custom = CustomCatalog::load(&state.db).await?;
     Ok(Json(agile_issue_json(&mut ctx, &custom, &issue).await?))
@@ -42,7 +43,7 @@ pub struct RankRequest {
 /// Ranks issues before or after another issue. Returns 204 when every issue moved.
 pub async fn rank(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Json(request): Json<RankRequest>,
 ) -> ApiResult<StatusCode> {
     if request.rank_before_issue.is_none() && request.rank_after_issue.is_none() {
@@ -50,9 +51,10 @@ pub async fn rank(
             "Specify rankBeforeIssue or rankAfterIssue.",
         ));
     }
-    let issues = requested_issues(&state, &request.issues).await?;
+    let issues = requested_issues(&state, &user, &request.issues).await?;
     rank_relative(
         &state,
+        &user,
         &issues,
         request.rank_before_issue.as_deref(),
         request.rank_after_issue.as_deref(),
@@ -94,11 +96,11 @@ async fn estimation_json(state: &AppState, issue_id: i64, field: &CustomField) -
 
 pub async fn get_estimation(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Query(query): Query<EstimationQuery>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let field = estimation_field(&state, query.board_id).await?;
     Ok(Json(estimation_json(&state, issue.id, &field).await?))
 }
@@ -111,7 +113,7 @@ pub async fn set_estimation(
     Query(query): Query<EstimationQuery>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "EDIT_ISSUES").await?;
     let field = estimation_field(&state, query.board_id).await?;
     let number = match body.get("value") {
         None | Some(Value::Null) => Value::Null,
@@ -145,7 +147,7 @@ pub async fn to_backlog(
     CurrentUser(user): CurrentUser,
     Json(request): Json<MoveRequest>,
 ) -> ApiResult<StatusCode> {
-    for issue in requested_issues(&state, &request.issues).await? {
+    for issue in requested_issues(&state, &user, &request.issues).await? {
         set_sprint(&state, &user, &issue, None).await?;
     }
     Ok(StatusCode::NO_CONTENT)
@@ -159,12 +161,13 @@ pub async fn to_board_backlog(
     Json(request): Json<MoveRequest>,
 ) -> ApiResult<StatusCode> {
     find_board(&state, &board_id).await?;
-    let issues = requested_issues(&state, &request.issues).await?;
+    let issues = requested_issues(&state, &user, &request.issues).await?;
     for issue in &issues {
         set_sprint(&state, &user, issue, None).await?;
     }
     rank_relative(
         &state,
+        &user,
         &issues,
         request.rank_before_issue.as_deref(),
         request.rank_after_issue.as_deref(),

@@ -1,5 +1,6 @@
 //! Boards: listing, creation, configuration, and the issue views of a board.
 
+use crate::api::access::find_issue_as;
 use crate::api::extract::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -14,6 +15,7 @@ use super::{
 };
 use crate::AppState;
 use crate::api::ApiVersion;
+use crate::api::access::browsable_projects;
 use crate::api::render::Ctx;
 use crate::api::search::parse_jql;
 use crate::auth::CurrentUser;
@@ -54,14 +56,17 @@ async fn board_project(db: &SqlitePool, board: &Board) -> ApiResult<Option<Proje
     })
 }
 
+fn board_not_found() -> ApiError {
+    ApiError::not_found(
+        "The requested board cannot be viewed because it either does not exist or you do not have permission to view it.",
+    )
+}
+
 pub(super) async fn find_board(state: &AppState, id: &str) -> ApiResult<Board> {
-    let not_found = || {
-        ApiError::not_found(
-            "The requested board cannot be viewed because it either does not exist or you do not have permission to view it.",
-        )
-    };
-    let id: i64 = id.parse().map_err(|_| not_found())?;
-    boards::by_id(&state.db, id).await?.ok_or_else(not_found)
+    let id: i64 = id.parse().map_err(|_| board_not_found())?;
+    boards::by_id(&state.db, id)
+        .await?
+        .ok_or_else(board_not_found)
 }
 
 /// The board's own query: its filter's JQL.
@@ -119,10 +124,11 @@ pub struct ListQuery {
 
 pub async fn list(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<Value>> {
     let ctx = Ctx::new(&state, ApiVersion::V2).await?;
+    let browsable = browsable_projects(&state.db, &user).await?;
     let project_id = match &query.project_key_or_id {
         Some(reference) => Some(
             projects::by_id_or_key(&state.db, reference)
@@ -144,7 +150,12 @@ pub async fn list(
             .as_ref()
             .is_none_or(|n| board.name.to_lowercase().contains(&n.to_lowercase()));
         let project_ok = project_id.is_none_or(|p| board.project_id == Some(p));
-        if type_ok && name_ok && project_ok {
+        // Boards of projects the user cannot browse are hidden.
+        let visible = match (&browsable, board.project_id) {
+            (Some(ids), Some(project)) => ids.contains(&project),
+            _ => true,
+        };
+        if type_ok && name_ok && project_ok && visible {
             values.push(board_json(&ctx, &board).await?);
         }
     }
@@ -229,10 +240,15 @@ pub async fn create(
 
 pub async fn get(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let board = find_board(&state, &id).await?;
+    if let Some(ids) = browsable_projects(&state.db, &user).await?
+        && board.project_id.is_some_and(|p| !ids.contains(&p))
+    {
+        return Err(board_not_found());
+    }
     let ctx = Ctx::new(&state, ApiVersion::V2).await?;
     Ok(Json(board_json(&ctx, &board).await?))
 }
@@ -509,7 +525,7 @@ pub async fn epic_issues(
     Query(params): Query<IssueQuery>,
 ) -> ApiResult<Json<Value>> {
     let board = find_board(&state, &id).await?;
-    let epic = crate::api::issues::find_issue(&state, &epic_id).await?;
+    let epic = find_issue_as(&state, &user, &epic_id, "BROWSE_PROJECTS").await?;
     let query = ranked(vec![
         board_clause(&state, &board).await?,
         Some(clause("parent", Operator::Equals, value(epic.key))),

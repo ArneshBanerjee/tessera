@@ -1,13 +1,14 @@
 //! Comments: `/issue/{idOrKey}/comment` and `/issue/{idOrKey}/comment/{id}`.
 
 use super::extract::Json;
+use crate::api::access::{check, find_issue_access, find_issue_as};
 use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::issues::{comment_json, find_issue};
+use super::issues::comment_json;
 use super::render::{Ctx, rich_text_input};
 use super::{ApiVersion, Page};
 use crate::AppState;
@@ -38,11 +39,11 @@ async fn find_comment(state: &AppState, issue_id: i64, id: &str) -> ApiResult<Co
 pub async fn list(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Query(page): Query<Page>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let (start_at, max_results) = page.bounded(5000);
     let (page, total) = comments::list(&state.db, issue.id, start_at, max_results).await?;
     let mut ctx = Ctx::new(&state, version).await?;
@@ -65,7 +66,7 @@ pub async fn create(
     Path(id_or_key): Path<String>,
     Json(request): Json<CommentRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "ADD_COMMENTS").await?;
     let comment =
         comments::create(&state.db, issue.id, user.id, &parse_body(&request.body)?).await?;
     // Commenting makes you a watcher, as with Jira's default autowatch setting.
@@ -80,24 +81,13 @@ pub async fn create(
 pub async fn get(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id_or_key, id)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let comment = find_comment(&state, issue.id, &id).await?;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok(Json(comment_json(&mut ctx, issue.id, &comment).await?))
-}
-
-/// Only the author or a site administrator may change or delete a comment, as in Jira.
-fn check_owner(user: &crate::store::users::User, comment: &Comment) -> ApiResult<()> {
-    if comment.author_id == user.id || user.is_admin {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden(
-            "You do not have the permission to edit this comment.",
-        ))
-    }
 }
 
 pub async fn update(
@@ -107,9 +97,13 @@ pub async fn update(
     Path((id_or_key, id)): Path<(String, String)>,
     Json(request): Json<CommentRequest>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let (issue, access) = find_issue_access(&state, &user, &id_or_key).await?;
     let comment = find_comment(&state, issue.id, &id).await?;
-    check_owner(&user, &comment)?;
+    let own = comment.author_id == user.id;
+    check(
+        access.can_own_or_all("EDIT_OWN_COMMENTS", "EDIT_ALL_COMMENTS", own, &issue),
+        "EDIT_ALL_COMMENTS",
+    )?;
     let updated =
         comments::update(&state.db, comment.id, user.id, &parse_body(&request.body)?).await?;
     let mut ctx = Ctx::new(&state, version).await?;
@@ -121,9 +115,13 @@ pub async fn delete(
     CurrentUser(user): CurrentUser,
     Path((id_or_key, id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let (issue, access) = find_issue_access(&state, &user, &id_or_key).await?;
     let comment = find_comment(&state, issue.id, &id).await?;
-    check_owner(&user, &comment)?;
+    let own = comment.author_id == user.id;
+    check(
+        access.can_own_or_all("DELETE_OWN_COMMENTS", "DELETE_ALL_COMMENTS", own, &issue),
+        "DELETE_ALL_COMMENTS",
+    )?;
     comments::delete(&state.db, comment.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

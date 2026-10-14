@@ -332,3 +332,4 @@ textarea.input { resize: vertical; }
 .token-bar { flex-direction: column; align-items: flex-start; }
 .token { user-select: all; word-break: break-all; }
 .nav-avatar { display: inline-flex; }
+.group-header { margin-top: 32px; }

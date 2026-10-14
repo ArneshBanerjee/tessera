@@ -7,6 +7,7 @@
 //! - `leave`: keep it.
 
 use super::extract::Json;
+use crate::api::access::{check, find_issue_access, find_issue_as};
 use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -15,7 +16,6 @@ use serde_json::{Value, json};
 
 use super::ApiVersion;
 use super::issue_fields::CustomCatalog;
-use super::issues::find_issue;
 use super::render::{Ctx, rich_text_input};
 use crate::AppState;
 use crate::auth::CurrentUser;
@@ -162,17 +162,6 @@ async fn find_worklog(state: &AppState, issue: &Issue, id: &str) -> ApiResult<Wo
         .ok_or_else(not_found)
 }
 
-/// Only the author or a site administrator may change or delete a worklog.
-fn check_owner(user: &User, worklog: &Worklog) -> ApiResult<()> {
-    if worklog.author_id == user.id || user.is_admin {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden(
-            "You do not have the permission to edit this worklog.",
-        ))
-    }
-}
-
 /// The `worklog` field of an issue: the first 20 worklogs and the total.
 pub async fn issue_worklog_json(ctx: &mut Ctx, issue_id: i64) -> ApiResult<Value> {
     let all = worklogs::of_issue(&ctx.state.db, issue_id).await?;
@@ -200,11 +189,11 @@ fn default_worklog_page() -> i64 {
 pub async fn list(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Query(page): Query<WorklogPage>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let mut ctx = Ctx::new(&state, version).await?;
     let all = worklogs::of_issue(&state.db, issue.id).await?;
     let (start_at, max_results) = (page.start_at.max(0), page.max_results.clamp(0, 5000));
@@ -232,7 +221,7 @@ pub async fn create(
     Query(query): Query<AdjustQuery>,
     Json(request): Json<WorklogRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "WORK_ON_ISSUES").await?;
     let input = parse_request(&request, None)?;
     let new_remaining = adjusted(&query, issue.remaining_estimate, input.seconds)?;
     let spent_before = worklogs::time_spent(&state.db, issue.id).await?;
@@ -253,10 +242,10 @@ pub async fn create(
 pub async fn get(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((id_or_key, id)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let worklog = find_worklog(&state, &issue, &id).await?;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok(Json(ctx.worklog_json(&worklog).await?))
@@ -270,9 +259,13 @@ pub async fn update(
     Query(query): Query<AdjustQuery>,
     Json(request): Json<WorklogRequest>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let (issue, access) = find_issue_access(&state, &user, &id_or_key).await?;
     let worklog = find_worklog(&state, &issue, &id).await?;
-    check_owner(&user, &worklog)?;
+    let own = worklog.author_id == user.id;
+    check(
+        access.can_own_or_all("EDIT_OWN_WORKLOGS", "EDIT_ALL_WORKLOGS", own, &issue),
+        "EDIT_ALL_WORKLOGS",
+    )?;
     let input = parse_request(&request, Some(&worklog))?;
     let delta = input.seconds - worklog.time_spent_seconds;
     let new_remaining = adjusted(&query, issue.remaining_estimate, delta)?;
@@ -298,9 +291,13 @@ pub async fn delete(
     Path((id_or_key, id)): Path<(String, String)>,
     Query(query): Query<AdjustQuery>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let (issue, access) = find_issue_access(&state, &user, &id_or_key).await?;
     let worklog = find_worklog(&state, &issue, &id).await?;
-    check_owner(&user, &worklog)?;
+    let own = worklog.author_id == user.id;
+    check(
+        access.can_own_or_all("DELETE_OWN_WORKLOGS", "DELETE_ALL_WORKLOGS", own, &issue),
+        "DELETE_ALL_WORKLOGS",
+    )?;
     let new_remaining = adjusted(
         &query,
         issue.remaining_estimate,

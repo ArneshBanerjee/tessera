@@ -132,4 +132,16 @@ check("moved to backlog", [i.key for i in jira.search_issues("sprint in openSpri
 jira.issue("COMPAT-5").delete()
 check("issue deleted", len(jira.search_issues("project = COMPAT", maxResults=False)) == 4)
 
+
+perms = jira.my_permissions(projectKey="COMPAT", permissions="BROWSE_PROJECTS,DELETE_ISSUES")
+check("my permissions", perms["permissions"]["BROWSE_PROJECTS"]["havePermission"])
+roles = jira.project_roles("COMPAT")
+check("project roles", {"Administrators", "Members", "Viewers"} <= set(roles))
+admins = jira.project_role("COMPAT", roles["Administrators"]["id"])
+check("project role actors", [a.actorUser.accountId for a in admins.actors] == [me["accountId"]])
+jira.add_group("compat-devs")
+jira.add_user_to_group(me["accountId"], "compat-devs")
+check("groups", "compat-devs" in jira.groups())
+check("group members", list(jira.group_members("compat-devs")) != [])
+
 print("All checks passed.")

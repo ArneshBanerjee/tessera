@@ -76,8 +76,22 @@ pub async fn run_query(
         current_user: user.map(|u| u.id),
         now: now_ms(),
     };
-    let compiled =
+    let mut compiled =
         jql::compile(query, &ctx).map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.0))?;
+    // Issues in projects the user cannot browse are never found.
+    let browsable = match user {
+        Some(user) => crate::api::access::browsable_projects(db, user).await?,
+        None => Some(Vec::new()),
+    };
+    if let Some(ids) = browsable {
+        let marks = vec!["?"; ids.len()].join(", ");
+        compiled.filter = if ids.is_empty() {
+            format!("({}) AND 0 = 1", compiled.filter)
+        } else {
+            format!("({}) AND i.project_id IN ({marks})", compiled.filter)
+        };
+        compiled.binds.extend(ids.into_iter().map(Bind::Int));
+    }
 
     let arguments = |extra: &[i64]| {
         let mut args = SqliteArguments::default();

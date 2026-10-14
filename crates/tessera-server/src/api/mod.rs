@@ -3,6 +3,7 @@
 //! Every route is served under both `/rest/api/2` and `/rest/api/3`. The versions differ only in
 //! rich text: v2 uses plain strings, v3 uses ADF documents. Handlers read [`ApiVersion`] to pick.
 
+pub mod access;
 mod account;
 pub mod agile;
 pub mod attachments;
@@ -15,6 +16,7 @@ mod issues;
 mod links;
 mod meta;
 mod parts;
+mod permissions;
 mod projects;
 pub mod render;
 mod schemes;
@@ -123,10 +125,67 @@ fn jira_routes() -> Router<AppState> {
             get(fields::options).post(fields::add_options),
         )
         // Schemes and categories
-        .route("/permissionscheme", get(schemes::permission_schemes))
+        .route(
+            "/permissionscheme",
+            get(permissions::schemes).post(permissions::create_scheme),
+        )
         .route(
             "/permissionscheme/{id}",
-            get(schemes::permission_scheme_by_id),
+            get(permissions::scheme)
+                .put(permissions::update_scheme)
+                .delete(permissions::delete_scheme),
+        )
+        .route(
+            "/permissionscheme/{id}/permission",
+            get(permissions::grants).post(permissions::create_grant),
+        )
+        .route(
+            "/permissionscheme/{id}/permission/{grant}",
+            get(permissions::get_grant).delete(permissions::delete_grant),
+        )
+        .route("/permissions", get(permissions::all))
+        .route("/mypermissions", get(permissions::mine))
+        // Roles and groups
+        .route(
+            "/role",
+            get(permissions::roles).post(permissions::create_role),
+        )
+        .route(
+            "/role/{id}",
+            get(permissions::get_role)
+                .put(permissions::update_role)
+                .post(permissions::update_role)
+                .delete(permissions::delete_role),
+        )
+        .route(
+            "/group",
+            get(permissions::get_group)
+                .post(permissions::create_group)
+                .delete(permissions::delete_group),
+        )
+        .route("/group/member", get(permissions::members))
+        .route(
+            "/group/user",
+            post(permissions::add_member).delete(permissions::remove_member),
+        )
+        .route("/group/bulk", get(permissions::bulk))
+        .route("/groups/picker", get(permissions::picker))
+        .route("/user/groups", get(permissions::user_groups))
+        .route("/project/{id_or_key}/role", get(permissions::project_roles))
+        .route(
+            "/project/{id_or_key}/roledetails",
+            get(permissions::project_role_details),
+        )
+        .route(
+            "/project/{id_or_key}/role/{role}",
+            get(permissions::project_role)
+                .post(permissions::add_role_actors)
+                .put(permissions::set_role_actors)
+                .delete(permissions::remove_role_actor),
+        )
+        .route(
+            "/project/{id_or_key}/permissionscheme",
+            get(permissions::project_scheme).put(permissions::assign_project_scheme),
         )
         .route(
             "/issuesecurityschemes",

@@ -1,6 +1,9 @@
 //! Attachments: upload to an issue, read metadata, download, and delete.
 
 use super::extract::Json;
+use crate::api::access::{Access, check, find_issue_as, require_issue};
+use crate::store::issues::{self, Issue};
+use crate::store::users::User;
 use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
@@ -9,7 +12,6 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use super::ApiVersion;
-use super::issues::find_issue;
 use super::render::Ctx;
 use crate::AppState;
 use crate::auth::CurrentUser;
@@ -57,7 +59,7 @@ pub async fn upload(
     if !token.is_some_and(|t| t.eq_ignore_ascii_case("no-check")) {
         return Err(ApiError::forbidden("XSRF check failed"));
     }
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "CREATE_ATTACHMENTS").await?;
     let mut saved: Vec<Attachment> = Vec::new();
     while let Some(field) = multipart
         .next_field()
@@ -102,22 +104,31 @@ pub async fn upload(
     Ok(Json(rendered))
 }
 
-async fn find(state: &AppState, id: &str) -> ApiResult<Attachment> {
+/// An attachment on an issue the user can browse, with the issue and the user's access to it.
+/// Attachments on hidden issues do not exist for the user.
+async fn find(state: &AppState, user: &User, id: &str) -> ApiResult<(Attachment, Issue, Access)> {
     let not_found =
         || ApiError::not_found(format!("The attachment with id '{id}' does not exist."));
-    let id: i64 = id.parse().map_err(|_| not_found())?;
-    attachments::by_id(&state.db, id)
+    let number: i64 = id.parse().map_err(|_| not_found())?;
+    let attachment = attachments::by_id(&state.db, number)
         .await?
-        .ok_or_else(not_found)
+        .ok_or_else(not_found)?;
+    let issue = issues::by_id(&state.db, attachment.issue_id)
+        .await?
+        .ok_or_else(not_found)?;
+    let access = require_issue(state, user, &issue, "BROWSE_PROJECTS")
+        .await
+        .map_err(|_| not_found())?;
+    Ok((attachment, issue, access))
 }
 
 pub async fn get(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let attachment = find(&state, &id).await?;
+    let (attachment, _, _) = find(&state, &user, &id).await?;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok(Json(ctx.attachment_json(&attachment).await?))
 }
@@ -125,10 +136,10 @@ pub async fn get(
 /// Downloads the file contents.
 pub async fn content(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
-    let attachment = find(&state, &id).await?;
+    let (attachment, _, _) = find(&state, &user, &id).await?;
     let bytes = tokio::fs::read(attachments::path(&state.data_dir, attachment.id))
         .await
         .map_err(|_| ApiError::not_found("The attachment file is missing."))?;
@@ -163,12 +174,17 @@ pub async fn delete(
     CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let attachment = find(&state, &id).await?;
-    if attachment.author_id != user.id && !user.is_admin {
-        return Err(ApiError::forbidden(
-            "You do not have permission to delete this attachment.",
-        ));
-    }
+    let (attachment, issue, access) = find(&state, &user, &id).await?;
+    let own = attachment.author_id == user.id;
+    check(
+        access.can_own_or_all(
+            "DELETE_OWN_ATTACHMENTS",
+            "DELETE_ALL_ATTACHMENTS",
+            own,
+            &issue,
+        ),
+        "DELETE_ALL_ATTACHMENTS",
+    )?;
     attachments::delete(&state.db, &state.data_dir, attachment.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

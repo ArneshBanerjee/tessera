@@ -85,7 +85,161 @@ pub fn Users() -> impl IntoView {
             <Show when=move || creating.get()>
                 <CreateUser on_close=Callback::new(move |()| creating.set(false))/>
             </Show>
+            <Groups/>
         </div>
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+struct GroupRef {
+    name: String,
+    group_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+struct GroupPage {
+    values: Vec<GroupRef>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+struct Member {
+    account_id: String,
+    display_name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+struct MemberPage {
+    values: Vec<Member>,
+}
+
+/// Groups and their members. Permission schemes and project roles can name groups.
+#[component]
+fn Groups() -> impl IntoView {
+    let session = use_session();
+    let groups = LocalResource::new(move || {
+        session.changes.track();
+        async {
+            api::get::<GroupPage>(&format!("{}/group/bulk?maxResults=1000", api::CORE))
+                .await
+                .map(|p| p.values)
+                .unwrap_or_default()
+        }
+    });
+    let users = crate::components::users_resource();
+    let name = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let create = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let body = json!({ "name": name.get() });
+        spawn_local(async move {
+            match api::post::<Value>(&format!("{}/group", api::CORE), &body).await {
+                Ok(_) => {
+                    name.set(String::new());
+                    error.set(None);
+                    session.changed();
+                }
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    view! {
+        <header class="page-header group-header"><h2>"Groups"</h2></header>
+        <form class="inline-form" on:submit=create>
+            <input class="input" placeholder="New group name" required
+                prop:value=move || name.get()
+                on:input:target=move |ev| name.set(ev.target().value())/>
+            <button class="button primary" type="submit">"Create group"</button>
+        </form>
+        <ErrorText error=error/>
+        <div class="group-list">
+            {move || groups.get().unwrap_or_default().into_iter().map(|group| view! {
+                <GroupCard group=group users=users error=error/>
+            }).collect_view()}
+        </div>
+    }
+}
+
+#[component]
+fn GroupCard(
+    group: GroupRef,
+    users: LocalResource<Vec<crate::model::User>>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let session = use_session();
+    let id = StoredValue::new(group.group_id.clone());
+    let members = LocalResource::new(move || {
+        session.changes.track();
+        async move {
+            api::get::<MemberPage>(&format!(
+                "{}/group/member?groupId={}&maxResults=1000",
+                api::CORE,
+                id.get_value()
+            ))
+            .await
+            .map(|p| p.values)
+            .unwrap_or_default()
+        }
+    });
+    let picked = RwSignal::new(None::<String>);
+    let add = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let Some(account) = picked.get() else { return };
+        spawn_local(async move {
+            let path = format!("{}/group/user?groupId={}", api::CORE, id.get_value());
+            match api::post::<Value>(&path, &json!({ "accountId": account })).await {
+                Ok(_) => session.changed(),
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    let remove = move |account: String| {
+        spawn_local(async move {
+            let path = format!(
+                "{}/group/user?groupId={}&accountId={account}",
+                api::CORE,
+                id.get_value()
+            );
+            match api::delete(&path).await {
+                Ok(()) => session.changed(),
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    let delete = move |_| {
+        spawn_local(async move {
+            match api::delete(&format!("{}/group?groupId={}", api::CORE, id.get_value())).await {
+                Ok(()) => session.changed(),
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    view! {
+        <section class="settings-card">
+            <div class="sprint-header">
+                <h3 class="list-title">{group.name}</h3>
+                <span class="spacer"></span>
+                <button class="button subtle small" on:click=delete>"Delete group"</button>
+            </div>
+            <ul class="ref-list">
+                {move || members.get().unwrap_or_default().into_iter().map(|member| {
+                    let account = member.account_id.clone();
+                    view! {
+                        <li class="ref-row">
+                            <span class="grow">{member.display_name}</span>
+                            <button class="button subtle small" on:click=move |_| remove(account.clone())>"Remove"</button>
+                        </li>
+                    }
+                }).collect_view()}
+            </ul>
+            <form class="inline-form" on:submit=add>
+                <crate::components::UserSelect users=users selected=None on_change=Callback::new(move |id| picked.set(id))/>
+                <button class="button" type="submit">"Add member"</button>
+            </form>
+        </section>
     }
 }
 

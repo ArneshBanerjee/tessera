@@ -1,6 +1,8 @@
 //! Project components and versions: `/component`, `/version`, and their project listings.
 
 use super::extract::Json;
+use crate::api::access::require_project;
+use crate::store::users::User;
 use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -11,7 +13,7 @@ use sqlx::SqlitePool;
 use super::render::Ctx;
 use super::{ApiVersion, Page};
 use crate::AppState;
-use crate::auth::{AdminUser, CurrentUser};
+use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
 use crate::store::components::{self, Component, ComponentFields};
 use crate::store::meta::json_id;
@@ -115,6 +117,20 @@ async fn find_project(state: &AppState, id_or_key: &str) -> ApiResult<Project> {
         .ok_or_else(|| ApiError::project_not_found(id_or_key))
 }
 
+/// Checks a permission in the project with this id.
+async fn check_project(
+    state: &AppState,
+    user: &User,
+    project_id: i64,
+    permission: &str,
+) -> ApiResult<()> {
+    let project = projects::by_id(&state.db, project_id)
+        .await?
+        .ok_or_else(|| ApiError::project_not_found(&project_id.to_string()))?;
+    require_project(state, user, &project, permission).await?;
+    Ok(())
+}
+
 fn paged(ctx: &Ctx, path: &str, values: Vec<Value>, page: &Page) -> Value {
     let (start_at, max_results) = page.bounded(1000);
     let total = values.len() as i64;
@@ -213,10 +229,11 @@ async fn check_component_name(
 pub async fn create_component(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Json(body): Json<Value>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let project = request_project(&state, &body).await?;
+    check_project(&state, &user, project.id, "ADMINISTER_PROJECTS").await?;
     let fields = component_fields(&state, &body, None).await?;
     check_component_name(&state, project.id, &fields.name, None).await?;
     let component = components::create(&state.db, project.id, &fields).await?;
@@ -230,10 +247,11 @@ pub async fn create_component(
 pub async fn get_component(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let component = find_component(&state, &id).await?;
+    check_project(&state, &user, component.project_id, "BROWSE_PROJECTS").await?;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok(Json(component_json(&mut ctx, &component).await?))
 }
@@ -241,11 +259,12 @@ pub async fn get_component(
 pub async fn update_component(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
     let component = find_component(&state, &id).await?;
+    check_project(&state, &user, component.project_id, "ADMINISTER_PROJECTS").await?;
     let fields = component_fields(&state, &body, Some(&component)).await?;
     check_component_name(
         &state,
@@ -268,11 +287,12 @@ pub struct DeleteComponentQuery {
 
 pub async fn delete_component(
     State(state): State<AppState>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Query(query): Query<DeleteComponentQuery>,
 ) -> ApiResult<StatusCode> {
     let component = find_component(&state, &id).await?;
+    check_project(&state, &user, component.project_id, "ADMINISTER_PROJECTS").await?;
     if let Some(target) = query.move_issues_to {
         let valid = components::by_id(&state.db, target)
             .await?
@@ -290,10 +310,11 @@ pub async fn delete_component(
 pub async fn component_issue_count(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let component = find_component(&state, &id).await?;
+    check_project(&state, &user, component.project_id, "BROWSE_PROJECTS").await?;
     let ctx = Ctx::new(&state, version).await?;
     Ok(Json(json!({
         "self": ctx.api_url(&format!("/component/{}/relatedIssueCounts", component.id)),
@@ -312,10 +333,11 @@ async fn project_components_json(ctx: &mut Ctx, project: &Project) -> ApiResult<
 pub async fn project_components(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Vec<Value>>> {
     let project = find_project(&state, &id_or_key).await?;
+    check_project(&state, &user, project.id, "BROWSE_PROJECTS").await?;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok(Json(project_components_json(&mut ctx, &project).await?))
 }
@@ -323,11 +345,12 @@ pub async fn project_components(
 pub async fn project_components_paged(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Query(page): Query<Page>,
 ) -> ApiResult<Json<Value>> {
     let project = find_project(&state, &id_or_key).await?;
+    check_project(&state, &user, project.id, "BROWSE_PROJECTS").await?;
     let mut ctx = Ctx::new(&state, version).await?;
     let values = project_components_json(&mut ctx, &project).await?;
     Ok(Json(paged(
@@ -432,10 +455,11 @@ async fn check_version_name(
 pub async fn create_version(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Json(body): Json<Value>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let project = request_project(&state, &body).await?;
+    check_project(&state, &user, project.id, "ADMINISTER_PROJECTS").await?;
     let fields = version_fields(&body, None)?;
     check_version_name(&state, project.id, &fields.name, None).await?;
     let created = versions::create(&state.db, project.id, &fields).await?;
@@ -446,10 +470,11 @@ pub async fn create_version(
 pub async fn get_version(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let found = find_version(&state, &id).await?;
+    check_project(&state, &user, found.project_id, "BROWSE_PROJECTS").await?;
     let ctx = Ctx::new(&state, version).await?;
     Ok(Json(ctx.version_json(&found)))
 }
@@ -457,11 +482,12 @@ pub async fn get_version(
 pub async fn update_version(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
     let found = find_version(&state, &id).await?;
+    check_project(&state, &user, found.project_id, "ADMINISTER_PROJECTS").await?;
     let fields = version_fields(&body, Some(&found))?;
     check_version_name(&state, found.project_id, &fields.name, Some(found.id)).await?;
     versions::update(&state.db, found.id, &fields).await?;
@@ -479,11 +505,12 @@ pub struct DeleteVersionQuery {
 
 pub async fn delete_version(
     State(state): State<AppState>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Query(query): Query<DeleteVersionQuery>,
 ) -> ApiResult<StatusCode> {
     let found = find_version(&state, &id).await?;
+    check_project(&state, &user, found.project_id, "ADMINISTER_PROJECTS").await?;
     for target in [query.move_fix_issues_to, query.move_affected_issues_to]
         .into_iter()
         .flatten()
@@ -512,11 +539,12 @@ pub async fn delete_version(
 pub async fn move_version(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
     let found = find_version(&state, &id).await?;
+    check_project(&state, &user, found.project_id, "ADMINISTER_PROJECTS").await?;
     let ordered = versions::for_project(&state.db, found.project_id).await?;
     let current = ordered.iter().position(|v| v.id == found.id).unwrap_or(0) as i64 + 1;
     let position = if let Some(after) = body.get("after").and_then(Value::as_str) {
@@ -556,10 +584,11 @@ pub async fn move_version(
 pub async fn version_issue_counts(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let found = find_version(&state, &id).await?;
+    check_project(&state, &user, found.project_id, "BROWSE_PROJECTS").await?;
     let (fixed, affected) = versions::issue_counts(&state.db, found.id).await?;
     let ctx = Ctx::new(&state, version).await?;
     Ok(Json(json!({
@@ -573,10 +602,11 @@ pub async fn version_issue_counts(
 pub async fn version_unresolved_count(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let found = find_version(&state, &id).await?;
+    check_project(&state, &user, found.project_id, "BROWSE_PROJECTS").await?;
     let (fixed, _) = versions::issue_counts(&state.db, found.id).await?;
     let ctx = Ctx::new(&state, version).await?;
     Ok(Json(json!({
@@ -589,10 +619,11 @@ pub async fn version_unresolved_count(
 pub async fn project_versions(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Vec<Value>>> {
     let project = find_project(&state, &id_or_key).await?;
+    check_project(&state, &user, project.id, "BROWSE_PROJECTS").await?;
     let ctx = Ctx::new(&state, version).await?;
     let all = versions::for_project(&state.db, project.id).await?;
     Ok(Json(all.iter().map(|v| ctx.version_json(v)).collect()))
@@ -601,11 +632,12 @@ pub async fn project_versions(
 pub async fn project_versions_paged(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Query(page): Query<Page>,
 ) -> ApiResult<Json<Value>> {
     let project = find_project(&state, &id_or_key).await?;
+    check_project(&state, &user, project.id, "BROWSE_PROJECTS").await?;
     let ctx = Ctx::new(&state, version).await?;
     let values = versions::for_project(&state.db, project.id)
         .await?

@@ -1,6 +1,9 @@
 //! Projects: `/project`, `/project/search`, `/project/{idOrKey}`, `/project/{idOrKey}/statuses`.
 
 use super::extract::Json;
+use crate::api::access::{browsable_projects, require_project};
+use crate::store::permissions;
+use crate::store::users::User;
 use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -49,14 +52,30 @@ async fn find(state: &AppState, id_or_key: &str) -> ApiResult<Project> {
         .ok_or_else(|| ApiError::project_not_found(id_or_key))
 }
 
+/// A project the user can browse. Others are reported as missing, as in Jira.
+async fn find_visible(state: &AppState, user: &User, id_or_key: &str) -> ApiResult<Project> {
+    let project = find(state, id_or_key).await?;
+    require_project(state, user, &project, "BROWSE_PROJECTS").await?;
+    Ok(project)
+}
+
+/// The projects a user can browse.
+async fn visible_projects(state: &AppState, user: &User) -> ApiResult<Vec<Project>> {
+    let all = projects::list(&state.db).await?;
+    Ok(match browsable_projects(&state.db, user).await? {
+        None => all,
+        Some(ids) => all.into_iter().filter(|p| ids.contains(&p.id)).collect(),
+    })
+}
+
 /// All projects as a plain array.
 pub async fn list(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
 ) -> ApiResult<Json<Vec<Value>>> {
     let ctx = Ctx::new(&state, version).await?;
-    let all = projects::list(&state.db).await?;
+    let all = visible_projects(&state, &user).await?;
     Ok(Json(all.iter().map(|p| ctx.project_ref(p)).collect()))
 }
 
@@ -69,13 +88,13 @@ pub struct SearchQuery {
 pub async fn search(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Query(query): Query<SearchQuery>,
     Query(page): Query<Page>,
 ) -> ApiResult<Json<Value>> {
     let ctx = Ctx::new(&state, version).await?;
     let needle = query.query.unwrap_or_default().to_lowercase();
-    let matching: Vec<Project> = projects::list(&state.db)
+    let matching: Vec<Project> = visible_projects(&state, &user)
         .await?
         .into_iter()
         .filter(|p| {
@@ -103,10 +122,10 @@ pub async fn search(
 pub async fn get(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let project = find(&state, &id_or_key).await?;
+    let project = find_visible(&state, &user, &id_or_key).await?;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok(Json(full_project(&mut ctx, &project).await?))
 }
@@ -235,6 +254,15 @@ pub async fn create(
         },
     )
     .await?;
+    // The lead (or the creator, without one) administers the new project.
+    let administrator = lead_id.unwrap_or(admin.id);
+    permissions::add_role_user(
+        &state.db,
+        project.id,
+        permissions::ADMINISTRATORS,
+        administrator,
+    )
+    .await?;
     if let Some(board_type) = template_board_type(&project, request.project_template_key.as_deref())
     {
         create_project_board(&state, admin.id, &project, board_type).await?;
@@ -262,15 +290,16 @@ pub struct ProjectUpdateRequest {
     assignee_type: Option<String>,
 }
 
-/// Updates a project. Site administrators only.
+/// Updates a project. Needs the Administer Projects permission.
 pub async fn update(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    AdminUser(_): AdminUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Json(request): Json<ProjectUpdateRequest>,
 ) -> ApiResult<Json<Value>> {
     let project = find(&state, &id_or_key).await?;
+    require_project(&state, &user, &project, "ADMINISTER_PROJECTS").await?;
     check_assignee_type(request.assignee_type.as_deref())?;
     check_category(&state, request.category_id).await?;
     let lead_id = lead_id(
@@ -312,10 +341,10 @@ pub async fn delete(
 pub async fn statuses(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Vec<Value>>> {
-    let project = find(&state, &id_or_key).await?;
+    let project = find_visible(&state, &user, &id_or_key).await?;
     let ctx = Ctx::new(&state, version).await?;
     let status_ids = workflows::statuses(&state.db, project.workflow_id).await?;
     let statuses: Vec<Value> = status_ids

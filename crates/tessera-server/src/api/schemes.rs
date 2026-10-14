@@ -1,8 +1,8 @@
 //! Schemes and project categories.
 //!
-//! Tessera has one permission model (signed-in users browse and edit; site administrators
-//! administer), one notification setup, and no issue security levels yet. Each is exposed as
-//! the single default scheme Jira clients look for when they create projects.
+//! Tessera has one notification setup and no issue security levels yet. Each is exposed as the
+//! single default scheme Jira clients look for when they create projects. Permission schemes
+//! live in `permissions`.
 
 use super::extract::Json;
 use axum::Extension;
@@ -18,46 +18,8 @@ use crate::auth::{AdminUser, CurrentUser};
 use crate::error::{ApiError, ApiResult};
 use crate::store::projects::{self, Category};
 
-/// The id of the default permission scheme in Jira.
-pub const DEFAULT_PERMISSION_SCHEME: i64 = 0;
 pub const DEFAULT_NOTIFICATION_SCHEME: i64 = 10000;
 pub const DEFAULT_SECURITY_SCHEME: i64 = 10000;
-
-fn permission_scheme(ctx: &Ctx) -> Value {
-    json!({
-        "expand": "permissions,user,group,projectRole,field,all",
-        "id": DEFAULT_PERMISSION_SCHEME,
-        "self": ctx.api_url(&format!("/permissionscheme/{DEFAULT_PERMISSION_SCHEME}")),
-        "name": "Default Permission Scheme",
-        "description": "Signed-in users can browse and edit all projects. Site administrators administer them.",
-    })
-}
-
-pub async fn permission_schemes(
-    State(state): State<AppState>,
-    Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
-) -> ApiResult<Json<Value>> {
-    let ctx = Ctx::new(&state, version).await?;
-    Ok(Json(
-        json!({ "permissionSchemes": [permission_scheme(&ctx)] }),
-    ))
-}
-
-pub async fn permission_scheme_by_id(
-    State(state): State<AppState>,
-    Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
-    Path(id): Path<i64>,
-) -> ApiResult<Json<Value>> {
-    if id != DEFAULT_PERMISSION_SCHEME {
-        return Err(ApiError::not_found(format!(
-            "Permission scheme {id} does not exist."
-        )));
-    }
-    let ctx = Ctx::new(&state, version).await?;
-    Ok(Json(permission_scheme(&ctx)))
-}
 
 pub async fn issue_security_schemes(
     State(state): State<AppState>,

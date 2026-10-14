@@ -1,5 +1,7 @@
 //! Issues: create, read, edit, delete, assign, history, and the create and edit metadata.
 
+use crate::api::access::Access;
+use crate::api::access::find_issue_as;
 use std::collections::BTreeMap;
 
 use super::extract::Json;
@@ -513,7 +515,7 @@ pub async fn get(
     Path(id_or_key): Path<String>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let mut ctx = Ctx::new(&state, version).await?.viewed_by(user.id);
     let custom = CustomCatalog::load(&state.db).await?;
     let view = IssueView::from_query(raw.as_deref());
@@ -562,6 +564,20 @@ pub async fn create(
     let project = projects::by_id_or_key(&state.db, &project_id_or_key)
         .await?
         .ok_or_else(|| ApiError::field("project", "Specify a valid project ID or key"))?;
+    // A project the user cannot see is reported the same way as one that does not exist.
+    let access = Access::load(&state.db, &user, &project).await?;
+    if !access.can("BROWSE_PROJECTS") {
+        return Err(ApiError::field(
+            "project",
+            "Specify a valid project ID or key",
+        ));
+    }
+    if !access.can("CREATE_ISSUES") {
+        return Err(ApiError::field(
+            "project",
+            "You do not have permission to create issues in this project.",
+        ));
+    }
     if !request.fields.contains_key("issuetype") {
         return Err(ApiError::field("issuetype", "Specify an issue type"));
     }
@@ -652,7 +668,7 @@ pub async fn edit(
     Path(id_or_key): Path<String>,
     Json(request): Json<IssueRequest>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "EDIT_ISSUES").await?;
     let mut ctx = Ctx::new(&state, version).await?;
     save_edit(&mut ctx, &issue, user.id, &request).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -668,11 +684,11 @@ pub struct DeleteQuery {
 
 pub async fn delete(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Query(query): Query<DeleteQuery>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "DELETE_ISSUES").await?;
     let catalog = crate::store::meta::Catalog::load(&state.db).await?;
     let subtasks: Vec<Issue> = issues::subtasks(&state.db, issue.id)
         .await?
@@ -706,7 +722,7 @@ pub async fn assign(
     Path(id_or_key): Path<String>,
     Json(assignee): Json<Value>,
 ) -> ApiResult<StatusCode> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "ASSIGN_ISSUES").await?;
     let mut ctx = Ctx::new(&state, version).await?;
     let request = IssueRequest {
         fields: Map::from_iter([("assignee".to_string(), assignee)]),
@@ -719,11 +735,11 @@ pub async fn assign(
 pub async fn changelog(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
     Query(page): Query<Page>,
 ) -> ApiResult<Json<Value>> {
-    let issue = find_issue(&state, &id_or_key).await?;
+    let issue = find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let mut ctx = Ctx::new(&state, version).await?;
     let all = changelog::for_issue(&state.db, issue.id).await?;
     let (start_at, max_results) = page.bounded(100);
@@ -838,7 +854,7 @@ fn field_meta(ctx: &Ctx, custom: &CustomCatalog, for_create: bool) -> BTreeMap<S
 pub async fn create_meta(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     RawQuery(raw): RawQuery,
 ) -> ApiResult<Json<Value>> {
     let raw = raw.as_deref();
@@ -858,7 +874,12 @@ pub async fn create_meta(
         let selected = (keys.is_empty() && ids.is_empty())
             || keys.iter().any(|k| k.eq_ignore_ascii_case(&project.key))
             || ids.contains(&project.id.to_string());
-        if !selected {
+        // Only projects the user may create issues in, as in Jira.
+        if !selected
+            || !Access::load(&state.db, &user, &project)
+                .await?
+                .can("CREATE_ISSUES")
+        {
             continue;
         }
         let issue_types: Vec<Value> = ctx
@@ -943,10 +964,10 @@ pub async fn create_meta_fields(
 pub async fn edit_meta(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    find_issue(&state, &id_or_key).await?;
+    find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
     let ctx = Ctx::new(&state, version).await?;
     let custom = CustomCatalog::load(&state.db).await?;
     Ok(Json(json!({ "fields": field_meta(&ctx, &custom, false) })))

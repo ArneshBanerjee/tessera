@@ -35,7 +35,9 @@ pub fn Projects() -> impl IntoView {
         <div class="page">
             <header class="page-header">
                 <h1>"Projects"</h1>
-                <button class="button primary" on:click=move |_| creating.set(true)>"Create project"</button>
+                <Show when=move || session.admin.get()>
+                    <button class="button primary" on:click=move |_| creating.set(true)>"Create project"</button>
+                </Show>
             </header>
             <Transition fallback=|| view! { <p class="muted">"Loading projects…"</p> }>
                 {move || projects.get().map(|result| match result {
@@ -238,6 +240,7 @@ pub fn ProjectLayout() -> impl IntoView {
                         }
                     })}
                     <A href="issues" attr:class="sidebar-link">"Issues"</A>
+                    <A href="settings" attr:class="sidebar-link">"Project settings"</A>
                 </nav>
                 {move || project.get().flatten().and_then(|p| p.lead).map(|lead| view! {
                     <div class="sidebar-footer muted small">

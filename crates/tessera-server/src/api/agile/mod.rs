@@ -12,6 +12,7 @@ mod sprints;
 
 pub use boards::create_board;
 
+use crate::api::access::find_issue_as;
 use axum::routing::{get, post, put};
 use axum::{Extension, Router};
 use serde::Deserialize;
@@ -20,7 +21,7 @@ use tessera_jql::ast::{Clause, Direction, Field, Operand, Operator, OrderBy, Que
 
 use super::ApiVersion;
 use super::issue_fields::CustomCatalog;
-use super::issues::{IssueRequest, IssueView, find_issue, issue_json, save_edit};
+use super::issues::{IssueRequest, IssueView, issue_json, save_edit};
 use super::render::Ctx;
 use super::search::{parse_jql, run_query};
 use crate::AppState;
@@ -306,7 +307,7 @@ fn default_page() -> i64 {
 }
 
 /// The issues named in a move or rank request (keys or ids), at most 50, all existing.
-async fn requested_issues(state: &AppState, keys: &[String]) -> ApiResult<Vec<Issue>> {
+async fn requested_issues(state: &AppState, user: &User, keys: &[String]) -> ApiResult<Vec<Issue>> {
     if keys.len() > 50 {
         return Err(ApiError::bad_request(
             "At most 50 issues may be moved or ranked at once.",
@@ -314,7 +315,7 @@ async fn requested_issues(state: &AppState, keys: &[String]) -> ApiResult<Vec<Is
     }
     let mut found = Vec::with_capacity(keys.len());
     for key in keys {
-        found.push(find_issue(state, key).await?);
+        found.push(find_issue_as(state, user, key, "EDIT_ISSUES").await?);
     }
     Ok(found)
 }
@@ -322,13 +323,20 @@ async fn requested_issues(state: &AppState, keys: &[String]) -> ApiResult<Vec<Is
 /// Puts issues before or after another issue in the global rank.
 async fn rank_relative(
     state: &AppState,
+    user: &User,
     issues: &[Issue],
     before: Option<&str>,
     after: Option<&str>,
 ) -> ApiResult<()> {
     let (anchor, before_anchor) = match (before, after) {
-        (Some(key), _) => (find_issue(state, key).await?, true),
-        (None, Some(key)) => (find_issue(state, key).await?, false),
+        (Some(key), _) => (
+            find_issue_as(state, user, key, "BROWSE_PROJECTS").await?,
+            true,
+        ),
+        (None, Some(key)) => (
+            find_issue_as(state, user, key, "BROWSE_PROJECTS").await?,
+            false,
+        ),
         (None, None) => return Ok(()),
     };
     if issues.iter().any(|i| i.id == anchor.id) {

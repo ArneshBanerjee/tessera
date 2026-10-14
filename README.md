@@ -31,7 +31,8 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 | Saved filters | Create, read, update, delete, search, favourites, sharing (global, signed-in users, project), and `filter = ...` in JQL |
 | Fields | System fields, custom fields (text, number, date, user, select, multi-select, labels) and their options |
 | Search | `search` and `search/jql`, with paging, `names`, and the rules below |
-| Metadata | Issue types, statuses, status categories, priorities, resolutions, permission, notification and security schemes |
+| Permissions | Permission schemes with grants to everyone, groups, users, project roles, the project lead, reporters, and assignees; project roles and their members; groups; `mypermissions`. Projects a user cannot browse are hidden from every endpoint and from search, as in Jira. |
+| Metadata | Issue types, statuses, status categories, priorities, resolutions, notification and security schemes |
 
 **Jira Software** (`/rest/agile/1.0`): scrum and kanban boards with columns, board issues and backlog, sprints (create, start, complete, delete, swap, move issues), global ranking, epics (issues, colors, done, rank), estimation, and board and sprint properties. Software projects created from scrum, kanban, or basic templates get a board, as in Jira. Sprint, Rank, and Story point estimate are built-in fields.
 
@@ -39,7 +40,7 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 
 Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
-**Web app**: log in, your work, projects (create from scrum, kanban, or task tracking templates), the backlog (quick create, sprints, drag issues into sprints, start sprint), the board (drag cards to change status, complete sprint), the issue view (edit summary and description in Markdown, transitions, assignee, reporter, priority, labels, due date, story points, subtasks, issue links, attachments, comments, history, watch, delete), JQL search with saved filters and favourites, and quick search. For Confluence: spaces, a page tree, pages with their history and old versions (with restore), a Markdown editor that saves pages as ADF (with images from attachments), attachments, labels, and threaded comments. Your profile page manages your name, time zone, password, and API tokens, and administrators manage users. The server serves the app from its own binary.
+**Web app**: log in, your work, projects (create from scrum, kanban, or task tracking templates), the backlog (quick create, sprints, drag issues into sprints, start sprint), the board (drag cards to change status, complete sprint), the issue view (edit summary and description in Markdown, transitions, assignee, reporter, priority, labels, due date, story points, subtasks, issue links, attachments, comments, history, watch, delete), JQL search with saved filters and favourites, and quick search. For Confluence: spaces, a page tree, pages with their history and old versions (with restore), a Markdown editor that saves pages as ADF (with images from attachments), attachments, labels, and threaded comments. Your profile page manages your name, time zone, password, and API tokens. Project settings manage details and who holds each project role, and administrators manage users and groups. The server serves the app from its own binary.
 
 **Confluence** (`/wiki/rest/api`, the v1 API): spaces (with home pages), pages, blog posts, and comments with replies. Every version is kept: updates must name the next version number (409 otherwise, as in Confluence), old versions can be read and restored. The page tree: children, descendants, ancestors, and moving pages before, after, or under others. Attachments with versions (upload, new versions, download, images in pages), trash and purge, labels, history, and content body conversion. Bodies use the storage format; the `view` format is sanitized HTML. Errors use Confluence's format.
 
@@ -49,7 +50,7 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Sprint reports and burndown, quick filters, project roles and fine-grained permissions, notifications, Confluence inline comments, page restrictions, and a rich-text editor, and import of Atlassian backups.
+Sprint reports and burndown, quick filters, Confluence space permissions, issue security levels, notifications, Confluence inline comments, page restrictions, and a rich-text editor, and import of Atlassian backups.
 
 ## Compatibility
 
@@ -118,7 +119,7 @@ To work on the web app, run the server on port 8080 and `trunk serve` in `crates
 | --- | --- |
 | 1. Foundation | Workspace, JQL parser, server. **Done.** |
 | 2. Jira core API | Users, projects, issues, workflows, comments, custom fields, JQL search, history. **Done.** |
-| 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions. **Done.** Roles and permissions follow. |
+| 3. Jira depth | Attachments, issue links, watchers, votes, worklogs, components, versions, groups, project roles, and permission schemes. **Done.** |
 | 4. Boards | Saved filters, scrum and kanban boards, sprints, backlog, ranking, epics, and the Agile REST API. **Done.** |
 | 5. Web UI | Leptos (Rust compiled to WebAssembly) app. **First version done.** A Tauri desktop app follows. |
 | 6. Confluence core | Spaces, page tree, versions, comments, labels, attachments, CQL, the v1 and v2 APIs, and the web app with a Markdown editor. **In progress.** A rich-text editor and inline comments follow. |

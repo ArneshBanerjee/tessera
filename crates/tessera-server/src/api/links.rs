@@ -6,6 +6,8 @@
 //! ("blocks PROJ-2"), and PROJ-2 shows `inwardIssue: PROJ-1` ("is blocked by PROJ-1").
 
 use super::extract::Json;
+use crate::api::access::require_issue;
+use crate::store::users::User;
 use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -124,6 +126,9 @@ pub async fn create(
     let link_type = type_by_ref(&state, &request.link_type).await?;
     let inward = issue_by_ref(&state, &request.inward_issue, "inwardIssue").await?;
     let outward = issue_by_ref(&state, &request.outward_issue, "outwardIssue").await?;
+    // Linking needs Link Issues on the issue the link starts from, and sight of the other.
+    require_issue(&state, &user, &outward, "LINK_ISSUES").await?;
+    require_issue(&state, &user, &inward, "BROWSE_PROJECTS").await?;
     if inward.id == outward.id {
         return Err(ApiError::bad_request("You cannot link an issue to itself."));
     }
@@ -138,19 +143,29 @@ pub async fn create(
     Ok(StatusCode::CREATED)
 }
 
-async fn find_link(state: &AppState, id: &str) -> ApiResult<Link> {
+/// A link between two issues the user can see.
+async fn find_link(state: &AppState, user: &User, id: &str) -> ApiResult<Link> {
     let not_found = || ApiError::not_found(format!("No issue link with id '{id}' exists."));
     let id: i64 = id.parse().map_err(|_| not_found())?;
-    links::by_id(&state.db, id).await?.ok_or_else(not_found)
+    let link = links::by_id(&state.db, id).await?.ok_or_else(not_found)?;
+    for issue_id in [link.outward_issue_id, link.inward_issue_id] {
+        let issue = issues::by_id(&state.db, issue_id)
+            .await?
+            .ok_or_else(not_found)?;
+        require_issue(state, user, &issue, "BROWSE_PROJECTS")
+            .await
+            .map_err(|_| not_found())?;
+    }
+    Ok(link)
 }
 
 pub async fn get(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let link = find_link(&state, &id).await?;
+    let link = find_link(&state, &user, &id).await?;
     let ctx = Ctx::new(&state, version).await?;
     let link_type = links::type_by_id(&state.db, link.link_type_id)
         .await?
@@ -172,10 +187,14 @@ pub async fn get(
 
 pub async fn delete(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let link = find_link(&state, &id).await?;
+    let link = find_link(&state, &user, &id).await?;
+    let outward = issues::by_id(&state.db, link.outward_issue_id)
+        .await?
+        .expect("linked issue exists");
+    require_issue(&state, &user, &outward, "LINK_ISSUES").await?;
     links::delete(&state.db, link.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

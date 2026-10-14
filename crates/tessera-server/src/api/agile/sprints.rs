@@ -22,17 +22,35 @@ use super::{
 };
 use crate::AppState;
 use crate::api::ApiVersion;
+use crate::api::access::require_project;
 use crate::api::render::Ctx;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
 use crate::store::properties::Entity;
 use crate::store::sprints::{self, Sprint};
+use crate::store::users::User;
+use crate::store::{boards, projects};
 use crate::time::{now_ms, parse_jira_datetime};
 
 async fn find(state: &AppState, id: &str) -> ApiResult<Sprint> {
     let not_found = || ApiError::not_found(format!("Sprint with id {id} does not exist."));
     let id: i64 = id.parse().map_err(|_| not_found())?;
     sprints::by_id(&state.db, id).await?.ok_or_else(not_found)
+}
+
+/// Changing sprints needs the Manage Sprints permission in the project of the sprint's board.
+async fn check_manage(state: &AppState, user: &User, board_id: Option<i64>) -> ApiResult<()> {
+    let Some(board) = board_id else { return Ok(()) };
+    let Some(project_id) = boards::by_id(&state.db, board)
+        .await?
+        .and_then(|b| b.project_id)
+    else {
+        return Ok(());
+    };
+    if let Some(project) = projects::by_id(&state.db, project_id).await? {
+        require_project(state, user, &project, "MANAGE_SPRINTS_PERMISSION").await?;
+    }
+    Ok(())
 }
 
 /// A sprint date from a request: `None` when absent, `Some(None)` for null.
@@ -65,7 +83,7 @@ fn check_name(name: &str) -> ApiResult<()> {
 
 pub async fn create(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Json(body): Json<Value>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let name = body
@@ -80,6 +98,7 @@ pub async fn create(
         .and_then(Value::as_i64)
         .ok_or_else(|| ApiError::field("originBoardId", "The board id is required."))?;
     let board = find_board(&state, &board_id.to_string()).await?;
+    check_manage(&state, &user, Some(board.id)).await?;
     if board.board_type != "scrum" {
         return Err(ApiError::bad_request("The board does not support sprints"));
     }
@@ -189,11 +208,13 @@ async fn apply(
 /// `PUT /sprint/{id}`: a full update.
 pub async fn replace(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
-    let sprint = apply(&state, find(&state, &id).await?, &body, true).await?;
+    let found = find(&state, &id).await?;
+    check_manage(&state, &user, found.origin_board_id).await?;
+    let sprint = apply(&state, found, &body, true).await?;
     let ctx = Ctx::new(&state, ApiVersion::V2).await?;
     Ok(Json(sprint_json(&ctx, &sprint)))
 }
@@ -201,21 +222,24 @@ pub async fn replace(
 /// `POST /sprint/{id}`: a partial update.
 pub async fn update(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
-    let sprint = apply(&state, find(&state, &id).await?, &body, false).await?;
+    let found = find(&state, &id).await?;
+    check_manage(&state, &user, found.origin_board_id).await?;
+    let sprint = apply(&state, found, &body, false).await?;
     let ctx = Ctx::new(&state, ApiVersion::V2).await?;
     Ok(Json(sprint_json(&ctx, &sprint)))
 }
 
 pub async fn delete(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     let sprint = find(&state, &id).await?;
+    check_manage(&state, &user, sprint.origin_board_id).await?;
     if sprint.state == "closed" {
         return Err(ApiError::bad_request("Closed sprints cannot be deleted."));
     }
@@ -254,12 +278,13 @@ pub async fn move_issues(
             "Issues can only be moved to open or active sprints.",
         ));
     }
-    let issues = requested_issues(&state, &request.issues).await?;
+    let issues = requested_issues(&state, &user, &request.issues).await?;
     for issue in &issues {
         set_sprint(&state, &user, issue, Some(sprint.id)).await?;
     }
     rank_relative(
         &state,
+        &user,
         &issues,
         request.rank_before_issue.as_deref(),
         request.rank_after_issue.as_deref(),
@@ -277,11 +302,12 @@ pub struct SwapRequest {
 /// Swaps the board positions of two sprints that are not closed.
 pub async fn swap(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Json(request): Json<SwapRequest>,
 ) -> ApiResult<StatusCode> {
     let first = find(&state, &id).await?;
+    check_manage(&state, &user, first.origin_board_id).await?;
     let second = find(&state, &request.sprint_to_swap_with.to_string()).await?;
     if !first.is_open() || !second.is_open() {
         return Err(ApiError::bad_request("Closed sprints cannot be swapped."));
