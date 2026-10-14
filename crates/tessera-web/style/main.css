@@ -347,3 +347,34 @@ textarea.input { resize: vertical; }
 .workflow-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px; }
 .workflow-card summary { cursor: pointer; }
 .workflow-card table { margin-top: 10px; }
+
+/* Charts. Series colors are a validated pair; text never takes a series color. */
+.chart {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --chart-grid: #e8eaee;
+  position: relative;
+}
+.chart-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart-svg .grid { stroke: var(--chart-grid); stroke-width: 1; }
+.chart-svg .tick { fill: var(--muted); font-size: 11px; }
+.chart-svg .value { fill: var(--text); font-size: 12px; font-weight: 600; }
+.chart-svg .series-1-line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-svg .series-1-dot { fill: var(--series-1); stroke: var(--surface); stroke-width: 2; }
+.chart-svg .guide-line { fill: none; stroke: #9aa1ad; stroke-width: 1.5; }
+.chart-svg .crosshair { stroke: #9aa1ad; stroke-width: 1; }
+.chart-svg .series-1-fill { fill: var(--series-1); }
+.chart-svg .series-2-fill { fill: var(--series-2); }
+.chart-legend { display: flex; gap: 16px; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.key-line { width: 16px; height: 2px; border-radius: 1px; }
+.key-line.series-1 { background: var(--series-1); }
+.key-line.guide { background: #9aa1ad; }
+.key-swatch { width: 10px; height: 10px; border-radius: 2px; }
+.key-swatch.series-1 { background: var(--series-1); }
+.key-swatch.series-2 { background: var(--series-2); }
+.chart-tooltip { position: absolute; top: 28px; right: 8px; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); pointer-events: none; }
+.chart-table { margin-top: 12px; }
+.report-heading { display: flex; justify-content: space-between; align-items: baseline; margin: 18px 0 6px; }
+.reports-page { max-width: 960px; }
+.sprint-picker { width: auto; }

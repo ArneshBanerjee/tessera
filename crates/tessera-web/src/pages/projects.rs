@@ -240,6 +240,9 @@ pub fn ProjectLayout() -> impl IntoView {
                         }
                     })}
                     <A href="issues" attr:class="sidebar-link">"Issues"</A>
+                    {move || board.get().flatten().filter(|b| b.board_type == "scrum").map(|_| view! {
+                        <A href="reports" attr:class="sidebar-link">"Reports"</A>
+                    })}
                     <A href="settings" attr:class="sidebar-link">"Project settings"</A>
                 </nav>
                 {move || project.get().flatten().and_then(|p| p.lead).map(|lead| view! {

@@ -8,6 +8,7 @@ pub mod filters;
 pub mod issue;
 pub mod project_settings;
 pub mod projects;
+pub mod reports;
 pub mod search;
 pub mod settings;
 pub mod wiki;
