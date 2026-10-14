@@ -134,7 +134,7 @@ pub async fn swap(db: &SqlitePool, a: &Sprint, b: &Sprint) -> sqlx::Result<()> {
 pub async fn of_issue(db: &SqlitePool, issue_id: i64) -> sqlx::Result<Vec<Sprint>> {
     sqlx::query_as(
         "SELECT s.id, s.name, s.state, s.goal, s.start_date, s.end_date, s.complete_date,
-            s.origin_board_id, s.sequence
+            s.origin_board_id, s.sequence, s.activated_at
          FROM sprints s JOIN issue_sprints i ON i.sprint_id = s.id
          WHERE i.issue_id = ? ORDER BY s.sequence, s.id",
     )

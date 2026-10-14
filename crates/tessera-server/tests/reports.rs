@@ -121,12 +121,18 @@ async fn reports_follow_what_happened_in_the_sprint() {
         .await;
     assert_eq!(status, StatusCode::OK, "{report}");
     let contents = &report["contents"];
-    assert_eq!(keys(&contents["completedIssues"]), [done_one.clone()]);
+    assert_eq!(
+        keys(&contents["completedIssues"]),
+        std::slice::from_ref(&done_one)
+    );
     assert_eq!(
         keys(&contents["issuesNotCompletedInCurrentSprint"]),
-        [late.clone()]
+        std::slice::from_ref(&late)
     );
-    assert_eq!(keys(&contents["puntedIssues"]), [removed.clone()]);
+    assert_eq!(
+        keys(&contents["puntedIssues"]),
+        std::slice::from_ref(&removed)
+    );
     assert_eq!(contents["issueKeysAddedDuringSprint"][&late], true);
     assert_eq!(contents["completedIssuesEstimateSum"]["value"], 3.0);
     assert_eq!(contents["puntedIssuesEstimateSum"]["value"], 5.0);
