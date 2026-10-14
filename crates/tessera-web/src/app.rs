@@ -129,6 +129,7 @@ fn Shell(me: User) -> impl IntoView {
                 <ParentRoute path=path!("/wiki/spaces/:key") view=wiki::SpaceLayout>
                     <Route path=path!("") view=wiki::SpaceHome/>
                     <Route path=path!("create") view=wiki::editor::CreatePage/>
+                    <Route path=path!("settings") view=wiki::space_settings::SpaceSettings/>
                     <Route path=path!("pages/:id") view=wiki::page::PageView/>
                     <Route path=path!("pages/:id/edit") view=wiki::editor::EditPage/>
                     <Route path=path!("pages/:id/history") view=wiki::page::PageHistory/>

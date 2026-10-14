@@ -2,6 +2,7 @@
 
 pub mod editor;
 pub mod page;
+pub mod space_settings;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -218,6 +219,7 @@ pub fn SpaceLayout() -> impl IntoView {
                         </div>
                         <nav class="sidebar-nav">
                             <A href=home attr:class="sidebar-link">"Overview"</A>
+                            <A href=format!("/wiki/spaces/{}/settings", s.key) attr:class="sidebar-link">"Space settings"</A>
                         </nav>
                         <div class="tree-header">
                             <span class="muted small">"Pages"</span>

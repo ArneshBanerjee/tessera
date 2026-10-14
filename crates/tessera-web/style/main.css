@@ -333,3 +333,8 @@ textarea.input { resize: vertical; }
 .token { user-select: all; word-break: break-all; }
 .nav-avatar { display: inline-flex; }
 .group-header { margin-top: 32px; }
+.wide-settings { max-width: 1100px; }
+.table-scroll { overflow-x: auto; }
+.permission-grid th { white-space: nowrap; font-size: 11px; }
+.check-cell { text-align: center; }
+.add-subjects { display: flex; flex-wrap: wrap; gap: 0 16px; margin-top: 8px; }
