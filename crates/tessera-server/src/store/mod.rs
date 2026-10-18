@@ -7,6 +7,7 @@ pub mod changelog;
 pub mod comments;
 pub mod components;
 pub mod content;
+pub mod dashboards;
 pub mod epics;
 pub mod fields;
 pub mod filters;

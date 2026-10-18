@@ -8,6 +8,7 @@ mod account;
 pub mod agile;
 pub mod attachments;
 mod comments;
+mod dashboards;
 pub mod extract;
 mod fields;
 pub mod filters;
@@ -23,6 +24,7 @@ mod schemes;
 mod search;
 mod server_info;
 mod session;
+mod sharing;
 mod social;
 mod transitions;
 mod users;
@@ -87,8 +89,17 @@ pub fn router() -> Router<AppState> {
         .nest(
             "/rest/tessera/1.0",
             account::router()
+                .route(
+                    "/dashboard/{id}/favourite",
+                    put(dashboards::add_favourite).delete(dashboards::remove_favourite),
+                )
+                .route("/dashboard/{id}/layout", put(dashboards::set_layout))
                 .merge(agile::reports::tessera_router())
                 .merge(agile::quick_filters::tessera_router()),
+        )
+        .route(
+            "/rest/internal/latest/dashboards/{id}/automatic-refresh-ms",
+            put(dashboards::set_refresh),
         )
         .nest(
             "/rest/greenhopper/1.0",
@@ -367,6 +378,35 @@ fn jira_routes() -> Router<AppState> {
         .route(
             "/project/{id_or_key}/version",
             get(parts::project_versions_paged),
+        )
+        // Dashboards
+        .route("/dashboard", get(dashboards::list).post(dashboards::create))
+        .route("/dashboard/search", get(dashboards::search))
+        .route("/dashboard/gadgets", get(dashboards::available))
+        .route(
+            "/dashboard/{id}",
+            get(dashboards::get)
+                .put(dashboards::update)
+                .delete(dashboards::delete),
+        )
+        .route("/dashboard/{id}/copy", post(dashboards::copy))
+        .route(
+            "/dashboard/{id}/gadget",
+            get(dashboards::gadgets).post(dashboards::add_gadget),
+        )
+        .route(
+            "/dashboard/{id}/gadget/{gadget}",
+            put(dashboards::update_gadget).delete(dashboards::delete_gadget),
+        )
+        .route(
+            "/dashboard/{id}/items/{item}/properties",
+            get(dashboards::property_keys),
+        )
+        .route(
+            "/dashboard/{id}/items/{item}/properties/{key}",
+            get(dashboards::property)
+                .put(dashboards::set_property)
+                .delete(dashboards::delete_property),
         )
         // Saved filters
         .route("/filter", post(filters::create))

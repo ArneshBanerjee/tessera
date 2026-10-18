@@ -29,6 +29,7 @@ The Jira REST API, under `/rest/api/2`, `/rest/api/3`, and `/rest/api/latest`, a
 | Worklogs | Log, edit, and delete work, with remaining estimate adjustment (`auto`, `new`, `manual`, `leave`) and time tracking fields |
 | Attachments | Upload (multipart, with Jira's XSRF header check), download, delete, metadata |
 | Saved filters | Create, read, update, delete, search, favourites, sharing (global, signed-in users, project), and `filter = ...` in JQL |
+| Dashboards | Create, read, update, delete, copy, search, sharing as for filters, gadgets (add, move, recolor, remove), gadget item properties, and the system dashboard. Favourites and column layouts at `/rest/tessera/1.0/dashboard/{id}`. |
 | Fields | System fields, custom fields (text, number, date, user, select, multi-select, labels) and their options |
 | Search | `search` and `search/jql`, with paging, `names`, and the rules below |
 | Permissions | Permission schemes with grants to everyone, groups, users, project roles, the project lead, reporters, and assignees; project roles and their members; groups; `mypermissions`. Projects a user cannot browse are hidden from every endpoint and from search, as in Jira. |
@@ -52,11 +53,11 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-Dashboards, issue security levels, in-app notifications, Confluence inline comments, a rich-text editor, and import of Atlassian backups.
+Dashboard gadgets in the web app, issue security levels, in-app notifications, Confluence inline comments, a rich-text editor, and import of Atlassian backups.
 
 ## Compatibility
 
-`scripts/compat/run.sh` starts a throwaway server and drives it with unchanged clients. The official Python [`jira`](https://pypi.org/project/jira/) client covers projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, components, versions, watchers, links, worklogs, attachments, saved filters, boards, sprints, ranking, the backlog, and deletion. The classic Confluence client from [`atlassian-python-api`](https://pypi.org/project/atlassian-python-api/) 3.x covers spaces, pages, updates, history, the page tree, attachments, labels, comments, CQL, restrictions, and the trash over v1, and its 5.x Cloud client covers spaces, pages, bodies, children, footer comments, versions, and deletion over v2. CI runs all three on every push.
+`scripts/compat/run.sh` starts a throwaway server and drives it with unchanged clients. The official Python [`jira`](https://pypi.org/project/jira/) client covers projects, issues, comments, transitions, assignment, JQL search with paging, create metadata, fields, components, versions, watchers, links, worklogs, attachments, saved filters, dashboards and gadgets, boards, sprints, ranking, the backlog, and deletion. The classic Confluence client from [`atlassian-python-api`](https://pypi.org/project/atlassian-python-api/) 3.x covers spaces, pages, updates, history, the page tree, attachments, labels, comments, CQL, restrictions, and the trash over v1, and its 5.x Cloud client covers spaces, pages, bodies, children, footer comments, versions, and deletion over v2. CI runs all three on every push.
 
 ## Run it
 

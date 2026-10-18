@@ -144,4 +144,26 @@ jira.add_user_to_group(me["accountId"], "compat-devs")
 check("groups", "compat-devs" in jira.groups())
 check("group members", list(jira.group_members("compat-devs")) != [])
 
+check("system dashboard", [d.id for d in jira.dashboards()] == ["10000"])
+board = jira.create_dashboard("Compat dashboard", description="From the client")
+check("dashboard created", jira.dashboard(board.id).name == "Compat dashboard")
+check("my dashboards", [d.name for d in jira.dashboards(filter="my")] == ["Compat dashboard"])
+keys = [g.moduleKey for g in jira.all_dashboard_gadgets()]
+check("available gadgets", "com.atlassian.jira.gadgets:filter-results-dashboard-item" in keys)
+gadget = jira.add_gadget_to_dashboard(
+    board.id,
+    color="green",
+    module_key="com.atlassian.jira.gadgets:filter-results-dashboard-item",
+    position={"column": 0, "row": 0},
+    title="Compat results",
+)
+jira.set_dashboard_item_property(board.id, gadget.id, "config", {"filterId": saved.id})
+gadgets = jira.dashboard_gadgets(board.id)
+check("dashboard gadgets", [g.title for g in gadgets] == ["Compat results"])
+check("gadget settings", gadgets[0].item_properties[0].value.filterId == saved.id)
+copy = jira.copy_dashboard(board.id, name="Compat copy")
+check("dashboard copied", [g.title for g in jira.dashboard(copy.id).gadgets] == ["Compat results"])
+jira.update_dashboard_automatic_refresh_minutes(board.id, 15)
+check("dashboard refresh", jira.dashboard(board.id).automaticRefreshMs == 15 * 60000)
+
 print("All checks passed.")
