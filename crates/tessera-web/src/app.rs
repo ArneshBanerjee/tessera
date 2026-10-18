@@ -11,8 +11,8 @@ use crate::api;
 use crate::components::{Avatar, ErrorText};
 use crate::model::User;
 use crate::pages::{
-    admin, admin_workflows, board, create, filters, issue, project_settings, projects, reports,
-    search, settings, wiki, your_work,
+    admin, admin_workflows, board, create, dashboards, filters, issue, project_settings, projects,
+    reports, search, settings, wiki, your_work,
 };
 
 /// Shared state for the signed-in user.
@@ -124,6 +124,8 @@ fn Shell(me: User) -> impl IntoView {
                 <Route path=path!("/browse/:key") view=issue::IssuePage/>
                 <Route path=path!("/issues") view=search::SearchPage/>
                 <Route path=path!("/filters") view=filters::FiltersPage/>
+                <Route path=path!("/jira/dashboards") view=dashboards::DashboardsPage/>
+                <Route path=path!("/jira/dashboards/:id") view=dashboards::DashboardPage/>
                 <Route path=path!("/settings") view=settings::Settings/>
                 <Route path=path!("/admin/users") view=admin::Users/>
                 <Route path=path!("/admin/workflows") view=admin_workflows::Workflows/>
@@ -187,6 +189,7 @@ fn TopNav() -> impl IntoView {
             <A href="/" attr:class="brand"><span class="brand-mark"></span>"Tessera"</A>
             <A href="/" attr:class="nav-link">"Your work"</A>
             <A href="/projects" attr:class="nav-link">"Projects"</A>
+            <A href="/jira/dashboards" attr:class="nav-link">"Dashboards"</A>
             <A href="/filters" attr:class="nav-link">"Filters"</A>
             <A href="/wiki" attr:class="nav-link">"Spaces"</A>
             <button class="button primary" on:click=move |_| session.creating.set(true)>"Create"</button>

@@ -4,6 +4,7 @@ pub mod admin;
 pub mod admin_workflows;
 pub mod board;
 pub mod create;
+pub mod dashboards;
 pub mod filters;
 pub mod issue;
 pub mod project_settings;

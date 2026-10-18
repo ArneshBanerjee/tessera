@@ -31,12 +31,12 @@ struct Burndown {
 }
 
 /// Milliseconds since the epoch for an API date-time.
-fn millis(text: &str) -> f64 {
+pub(crate) fn millis(text: &str) -> f64 {
     js_sys::Date::parse(&text.replacen("+0000", "Z", 1))
 }
 
 /// Clean tick values from zero to at least `max`.
-fn ticks(max: f64) -> Vec<f64> {
+pub(crate) fn ticks(max: f64) -> Vec<f64> {
     let max = max.max(1.0);
     let raw = max / 4.0;
     let magnitude = 10f64.powf(raw.log10().floor());
@@ -51,7 +51,7 @@ fn ticks(max: f64) -> Vec<f64> {
         .collect()
 }
 
-fn number(value: f64) -> String {
+pub(crate) fn number(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{value:.0}")
     } else {
