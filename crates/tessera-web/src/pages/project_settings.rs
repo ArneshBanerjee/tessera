@@ -42,6 +42,7 @@ pub fn ProjectSettings() -> impl IntoView {
             <People/>
             <Show when=move || use_session().admin.get()>
                 <WorkflowScheme/>
+                <SecurityScheme/>
             </Show>
         </div>
     }
@@ -284,6 +285,91 @@ fn WorkflowScheme() -> impl IntoView {
                     let selected = s.id == current;
                     view! { <option value=s.id.to_string() selected=selected>{s.name}</option> }
                 }).collect_view())}
+            </select>
+            <ErrorText error=error/>
+        </section>
+    }
+}
+
+/// The project's issue security scheme. Changing it clears the levels of the project's issues.
+#[component]
+fn SecurityScheme() -> impl IntoView {
+    let session = use_session();
+    let project = use_project();
+    let error = RwSignal::new(None::<String>);
+    let loaded = LocalResource::new(move || {
+        let key = project.key.get();
+        session.changes.track();
+        async move {
+            let found: Value = api::get(&format!("{}/project/{key}", api::CORE))
+                .await
+                .unwrap_or_default();
+            let id = found["id"].as_str().unwrap_or_default().to_string();
+            let all: Value = api::get(&format!("{}/issuesecurityschemes", api::CORE))
+                .await
+                .unwrap_or_default();
+            let current: Value = api::get(&format!(
+                "{}/issuesecurityschemes/project?projectId={id}",
+                api::CORE
+            ))
+            .await
+            .unwrap_or_default();
+            let current_id = current["values"][0]["issueSecuritySchemeId"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let schemes: Vec<(String, String)> = all["issueSecuritySchemes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|s| {
+                    (
+                        s["id"].to_string(),
+                        s["name"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect();
+            (id, schemes, current_id)
+        }
+    });
+    let change = move |scheme: String| {
+        let Some((project_id, _, _)) = loaded.get_untracked() else {
+            return;
+        };
+        let scheme = if scheme.is_empty() {
+            "-1".to_string()
+        } else {
+            scheme
+        };
+        spawn_local(async move {
+            let body = json!({ "schemeId": scheme, "projectId": project_id });
+            match api::request(
+                gloo_net::http::Method::PUT,
+                &format!("{}/issuesecurityschemes/project", api::CORE),
+                Some(&body),
+            )
+            .await
+            {
+                Ok(_) => {
+                    error.set(None);
+                    session.changed();
+                }
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    view! {
+        <section class="settings-card">
+            <h2>"Issue security"</h2>
+            <p class="muted small">"Issues lose their security level when the scheme changes."</p>
+            <select class="select" aria-label="Issue security scheme" on:change:target=move |ev| change(ev.target().value())>
+                {move || loaded.get().map(|(_, all, current)| view! {
+                    <option value="" selected=current.is_empty()>"None"</option>
+                    {all.into_iter().map(|(id, name)| {
+                        let selected = id == current;
+                        view! { <option value=id selected=selected>{name}</option> }
+                    }).collect_view()}
+                })}
             </select>
             <ErrorText error=error/>
         </section>

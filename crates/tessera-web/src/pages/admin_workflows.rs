@@ -69,6 +69,7 @@ pub fn AdminTabs(current: &'static str) -> impl IntoView {
         <nav class="tabs admin-tabs">
             {tab("/admin/users", "Users and groups")}
             {tab("/admin/workflows", "Workflows")}
+            {tab("/admin/security", "Issue security")}
         </nav>
     }
 }

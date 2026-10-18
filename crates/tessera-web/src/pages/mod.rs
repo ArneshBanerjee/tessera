@@ -1,6 +1,7 @@
 //! Pages of the app, and helpers they share.
 
 pub mod admin;
+pub mod admin_security;
 pub mod admin_workflows;
 pub mod board;
 pub mod create;

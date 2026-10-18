@@ -446,3 +446,14 @@ textarea.input { resize: vertical; }
 .pie-legend td { padding: 4px 6px; border-bottom: 1px solid var(--border); }
 .pie-legend tr.active td { background: var(--surface-sunken); }
 .pie-legend .key-swatch { display: inline-block; margin-right: 8px; vertical-align: -1px; }
+
+/* Issue security administration */
+.card-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.member-list { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.member-list li { display: flex; gap: 8px; align-items: center; }
+.member-form { flex-wrap: wrap; }
+.member-form .select, .member-form .input { width: auto; }
+.default-badge { margin-left: 6px; }
+.row-actions { white-space: nowrap; text-align: right; }
+.security-level { font-weight: 500; }
+.row-actions .link-button + .link-button { margin-left: 12px; }
