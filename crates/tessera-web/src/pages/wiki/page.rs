@@ -6,6 +6,7 @@ use leptos_router::components::A;
 use leptos_router::hooks::{use_navigate, use_params_map, use_query_map};
 use serde_json::{Value, json};
 
+use super::restrictions::RestrictionsButton;
 use super::{adf_body, page_path, use_space};
 use crate::api;
 use crate::app::use_session;
@@ -79,6 +80,7 @@ fn PageBody(content: WikiContent, old: bool) -> impl IntoView {
                 <A href=child attr:class="button">"Create child page"</A>
                 <A href=history attr:class="button subtle">"History"</A>
                 <WatchPage id=id.clone()/>
+                <RestrictionsButton id=id.clone()/>
                 <DeletePage id=id.clone()/>
             </div>
             <p class="byline muted small">

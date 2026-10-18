@@ -50,7 +50,7 @@ pub async fn list(
     };
     let (page, more) = spaces::list(&state.db, &filter, start, limit).await?;
     let expand = params.expand();
-    let mut ctx = WikiCtx::new(&state);
+    let mut ctx = WikiCtx::new(&state, &user);
     let mut results = Vec::with_capacity(page.len());
     for space in &page {
         results.push(ctx.space(space, &expand).await?);
@@ -66,7 +66,9 @@ pub async fn get(
 ) -> WikiResult<Json<Value>> {
     let space = find_space(&state, &user, &key).await?;
     Ok(Json(
-        WikiCtx::new(&state).space(&space, &params.expand()).await?,
+        WikiCtx::new(&state, &user)
+            .space(&space, &params.expand())
+            .await?,
     ))
 }
 
@@ -103,7 +105,7 @@ pub async fn create(
     )
     .await?;
     Ok(Json(
-        WikiCtx::new(&state)
+        WikiCtx::new(&state, &user)
             .space(&space, &Expand::default())
             .await?,
     ))
@@ -143,7 +145,7 @@ pub async fn update(
     spaces::update(&state.db, space.id, &name, &description, &status, homepage).await?;
     let space = find_space(&state, &user, &key).await?;
     Ok(Json(
-        WikiCtx::new(&state)
+        WikiCtx::new(&state, &user)
             .space(&space, &Expand::default())
             .await?,
     ))
@@ -176,13 +178,14 @@ pub async fn delete(
 /// Pages and blog posts of a space. `depth=root` limits pages to the top level.
 async fn space_content(
     state: &AppState,
+    user: &User,
     space: &Space,
     kind: &str,
     params: &Params,
 ) -> WikiResult<Value> {
     let (start, limit) = params.page(25, 500);
     let root_only = params.get("depth") == Some("root");
-    let all: Vec<content::Content> = match (kind, root_only) {
+    let mut all: Vec<content::Content> = match (kind, root_only) {
         ("page", true) => content::root_pages(&state.db, space.id).await?,
         _ => {
             let filter = content::ListFilter {
@@ -193,9 +196,10 @@ async fn space_content(
             content::list(&state.db, &filter).await?
         }
     };
+    access::retain_visible(&state.db, user, &mut all).await?;
     let more = all.len() as i64 > start + limit;
     let expand = params.expand();
-    let mut ctx = WikiCtx::new(state);
+    let mut ctx = WikiCtx::new(state, user);
     let mut results = Vec::new();
     for item in all.iter().skip(start as usize).take(limit as usize) {
         results.push(ctx.content(item, &expand).await?);
@@ -212,8 +216,8 @@ pub async fn content(
 ) -> WikiResult<Json<Value>> {
     let space = find_space(&state, &user, &key).await?;
     Ok(Json(json!({
-        "page": space_content(&state, &space, "page", &params).await?,
-        "blogpost": space_content(&state, &space, "blogpost", &params).await?,
+        "page": space_content(&state, &user, &space, "page", &params).await?,
+        "blogpost": space_content(&state, &user, &space, "blogpost", &params).await?,
         "_links": { "base": format!("{}/wiki", state.base_url), "context": "/wiki" },
     })))
 }
@@ -230,7 +234,9 @@ pub async fn content_of_type(
             "Unsupported content type: {kind}"
         )));
     }
-    Ok(Json(space_content(&state, &space, &kind, &params).await?))
+    Ok(Json(
+        space_content(&state, &user, &space, &kind, &params).await?,
+    ))
 }
 
 #[derive(Deserialize)]

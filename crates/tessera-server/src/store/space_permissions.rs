@@ -32,6 +32,7 @@ const GROUP_DEFAULTS: &[(&str, &str)] = &[
     ("create", "attachment"),
     ("delete", "space"),
     ("export", "space"),
+    ("restrict_content", "space"),
 ];
 
 #[derive(Debug, Clone, sqlx::FromRow)]

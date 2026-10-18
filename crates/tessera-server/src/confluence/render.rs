@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 
+use super::access;
 use super::error::WikiResult;
 use super::service::{self, Names};
 use crate::AppState;
@@ -69,6 +70,8 @@ pub const REPRESENTATIONS: &[&str] = &[
 /// Shared state for rendering one response: URLs and a cache of loaded users.
 pub struct WikiCtx<'a> {
     pub state: &'a AppState,
+    /// Who the response is for. Expanded children leave out what they may not see.
+    viewer: &'a User,
     users: HashMap<i64, Option<User>>,
     spaces: HashMap<i64, Option<Space>>,
     /// Loaded the first time a body is drawn for display.
@@ -76,9 +79,10 @@ pub struct WikiCtx<'a> {
 }
 
 impl<'a> WikiCtx<'a> {
-    pub fn new(state: &'a AppState) -> Self {
+    pub fn new(state: &'a AppState, viewer: &'a User) -> Self {
         Self {
             state,
+            viewer,
             users: HashMap::new(),
             spaces: HashMap::new(),
             names: None,
@@ -460,10 +464,19 @@ impl<'a> WikiCtx<'a> {
         } else {
             expandable_link("metadata", String::new());
         }
+        if expand.has("restrictions")
+            && matches!(content.content_type.as_str(), "page" | "blogpost")
+        {
+            out["restrictions"] = super::restrictions::by_operation_json(self, content).await?;
+        } else {
+            expandable_link(
+                "restrictions",
+                format!("/rest/api/content/{id}/restriction/byOperation"),
+            );
+        }
         for key in [
             "childTypes",
             "operations",
-            "restrictions",
             "schedulePublishDate",
             "schedulePublishInfo",
         ] {
@@ -542,7 +555,7 @@ impl<'a> WikiCtx<'a> {
         let mut expandable = Map::new();
         for kind in ["page", "comment", "attachment"] {
             if expand.has(kind) {
-                let list = child_list(&self.state.db, content, kind).await?;
+                let list = child_list(&self.state.db, self.viewer, content, kind).await?;
                 let mut results = Vec::with_capacity(list.len());
                 for child in &list {
                     results.push(Box::pin(self.content(child, &expand.below(kind))).await?);
@@ -571,7 +584,7 @@ impl<'a> WikiCtx<'a> {
         let mut out = Map::new();
         for kind in ["page", "comment"] {
             if expand.has(kind) {
-                let list = descendant_list(&self.state.db, content, kind).await?;
+                let list = descendant_list(&self.state.db, self.viewer, content, kind).await?;
                 let mut results = Vec::with_capacity(list.len());
                 for child in &list {
                     results.push(Box::pin(self.content(child, &expand.below(kind))).await?);
@@ -587,36 +600,47 @@ impl<'a> WikiCtx<'a> {
     }
 }
 
-/// Direct children of one type. Comments are the top-level comments on a page.
+/// Direct children of one type that the user may see. Comments are the top-level comments on a
+/// page.
 pub async fn child_list(
     db: &sqlx::SqlitePool,
+    user: &User,
     content: &Content,
     kind: &str,
-) -> sqlx::Result<Vec<Content>> {
-    match kind {
-        "page" if content.content_type == "page" => content::children(db, content.id, "page").await,
-        "attachment" => content::attachments(db, content.id).await,
-        "comment" => {
-            let all = content::comments(db, content.id).await?;
-            Ok(all.into_iter().filter(|c| c.parent_id.is_none()).collect())
+) -> WikiResult<Vec<Content>> {
+    let mut list = match kind {
+        "page" if content.content_type == "page" => {
+            content::children(db, content.id, "page").await?
         }
-        _ => Ok(Vec::new()),
-    }
+        "attachment" => content::attachments(db, content.id).await?,
+        "comment" => content::comments(db, content.id)
+            .await?
+            .into_iter()
+            .filter(|c| c.parent_id.is_none())
+            .collect(),
+        _ => Vec::new(),
+    };
+    access::retain_visible(db, user, &mut list).await?;
+    Ok(list)
 }
 
-/// Everything below content of one type: all pages under a page, or all comments on it.
+/// Everything of one type below content that the user may see: all pages under a page, or all
+/// comments on it.
 pub async fn descendant_list(
     db: &sqlx::SqlitePool,
+    user: &User,
     content: &Content,
     kind: &str,
-) -> sqlx::Result<Vec<Content>> {
-    match kind {
+) -> WikiResult<Vec<Content>> {
+    let mut list = match kind {
         "page" if content.content_type == "page" => {
-            content::descendants(db, content.id, "page").await
+            content::descendants(db, content.id, "page").await?
         }
-        "comment" => content::comments(db, content.id).await,
-        _ => Ok(Vec::new()),
-    }
+        "comment" => content::comments(db, content.id).await?,
+        _ => Vec::new(),
+    };
+    access::retain_visible(db, user, &mut list).await?;
+    Ok(list)
 }
 
 /// The page whose attachments a body's images name: a comment's page, or the content itself.

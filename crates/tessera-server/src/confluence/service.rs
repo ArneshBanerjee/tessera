@@ -28,7 +28,8 @@ pub fn content_id(value: &Value) -> Option<String> {
 }
 
 /// Content by id, in any status. Attachment ids may carry Confluence's `att` prefix.
-/// Content in a space the user cannot read is reported as missing.
+/// Content in a space the user cannot read, or hidden by page restrictions, is reported as
+/// missing.
 pub async fn find_content(state: &AppState, user: &User, id: &str) -> WikiResult<Content> {
     let number = id.strip_prefix("att").unwrap_or(id);
     let found = match number.parse::<i64>() {
@@ -40,6 +41,10 @@ pub async fn find_content(state: &AppState, user: &User, id: &str) -> WikiResult
         WikiError::content_not_found(id)
     })
     .await?;
+    // A page restricted from the user does not exist for them either.
+    if !access::can_view(&state.db, user, &found).await? {
+        return Err(WikiError::content_not_found(id));
+    }
     Ok(found)
 }
 
@@ -394,7 +399,7 @@ pub async fn save(
     let rights = access::require(&state.db, user, found.space_id, "read", "space").await?;
     let allowed = match found.content_type.as_str() {
         "comment" => found.creator_id == user.id || rights.can("administer", "space"),
-        kind => rights.can("create", kind),
+        kind => rights.can("create", kind) && access::can_edit(&state.db, user, found).await?,
     };
     if !allowed {
         return Err(access::denied("edit", &found.content_type));
@@ -459,6 +464,10 @@ pub async fn remove(state: &AppState, user: &User, found: &Content, purge: bool)
     let rights = access::require(&state.db, user, found.space_id, "read", "space").await?;
     let own = found.creator_id == user.id;
     if !rights.can_delete(&found.content_type, own) {
+        return Err(access::denied("delete", &found.content_type));
+    }
+    // Pages with edit restrictions can be deleted only by the people who may edit them.
+    if found.content_type != "comment" && !access::can_edit(&state.db, user, found).await? {
         return Err(access::denied("delete", &found.content_type));
     }
     match found.status.as_str() {
@@ -528,6 +537,9 @@ pub async fn attach(
         return Err(WikiError::bad_request("The file needs a name"));
     }
     access::require(&state.db, user, container.space_id, "create", "attachment").await?;
+    if !access::can_edit(&state.db, user, container).await? {
+        return Err(access::denied("attach files to", &container.content_type));
+    }
     let attachment = match existing {
         Some(found) => {
             content::update(

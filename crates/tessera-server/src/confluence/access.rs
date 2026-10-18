@@ -5,6 +5,10 @@
 //!
 //! A space the user cannot read does not exist for them: reads answer 404. A user who can read
 //! but lacks an operation gets 403.
+//!
+//! Page restrictions narrow this further: a page with view restrictions, and every page below
+//! it, exists only for the people and groups it names; a page with edit restrictions can be
+//! edited only by them.
 
 use std::collections::HashSet;
 
@@ -12,7 +16,9 @@ use axum::http::StatusCode;
 use sqlx::SqlitePool;
 
 use super::error::{WikiError, WikiResult};
+use crate::store::content::{self, Content};
 use crate::store::groups;
+use crate::store::restrictions::{self, Restriction};
 use crate::store::space_permissions;
 use crate::store::spaces;
 use crate::store::users::User;
@@ -133,10 +139,113 @@ pub async fn readable_spaces(db: &SqlitePool, user: &User) -> WikiResult<Option<
 pub async fn retain_readable(
     db: &SqlitePool,
     user: &User,
-    items: &mut Vec<crate::store::content::Content>,
+    items: &mut Vec<Content>,
 ) -> WikiResult<()> {
     if let Some(ids) = readable_spaces(db, user).await? {
         items.retain(|c| ids.contains(&c.space_id));
     }
+    Ok(())
+}
+
+/// Who the user is, for page restrictions: their account and their groups.
+struct Viewer {
+    admin: bool,
+    account_id: String,
+    groups: HashSet<String>,
+}
+
+impl Viewer {
+    async fn load(db: &SqlitePool, user: &User) -> sqlx::Result<Viewer> {
+        Ok(Viewer {
+            admin: user.is_admin,
+            account_id: user.account_id.clone(),
+            groups: groups::of_user(db, user.id)
+                .await?
+                .into_iter()
+                .map(|g| g.name.to_lowercase())
+                .collect(),
+        })
+    }
+
+    fn named_in(&self, restriction: &Restriction) -> bool {
+        match restriction.subject_type.as_str() {
+            "user" => restriction.subject == self.account_id,
+            "group" => self.groups.contains(&restriction.subject.to_lowercase()),
+            _ => false,
+        }
+    }
+
+    /// Whether the user passes the restrictions of one operation on one piece of content.
+    async fn passes(
+        &self,
+        db: &SqlitePool,
+        content_id: i64,
+        operation: &str,
+    ) -> sqlx::Result<bool> {
+        let named: Vec<Restriction> = restrictions::of_content(db, content_id)
+            .await?
+            .into_iter()
+            .filter(|r| r.operation == operation)
+            .collect();
+        Ok(named.is_empty() || named.iter().any(|r| self.named_in(r)))
+    }
+}
+
+/// The page whose restrictions govern content: a comment's or attachment's page, or itself.
+async fn governing_page(db: &SqlitePool, item: &Content) -> sqlx::Result<Content> {
+    match (item.content_type.as_str(), item.container_id) {
+        ("comment" | "attachment", Some(container)) => Ok(content::by_id(db, container)
+            .await?
+            .unwrap_or_else(|| item.clone())),
+        _ => Ok(item.clone()),
+    }
+}
+
+/// Whether page restrictions let the user view content. A view restriction on a page also
+/// hides every page below it.
+pub async fn can_view(db: &SqlitePool, user: &User, item: &Content) -> sqlx::Result<bool> {
+    let viewer = Viewer::load(db, user).await?;
+    if viewer.admin {
+        return Ok(true);
+    }
+    let page = governing_page(db, item).await?;
+    for node in content::ancestors(db, &page)
+        .await?
+        .iter()
+        .chain(std::iter::once(&page))
+    {
+        if !viewer.passes(db, node.id, "read").await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether page restrictions let the user edit content (or attach files to it). Edit
+/// restrictions apply to the page itself only.
+pub async fn can_edit(db: &SqlitePool, user: &User, item: &Content) -> sqlx::Result<bool> {
+    let viewer = Viewer::load(db, user).await?;
+    if viewer.admin {
+        return Ok(true);
+    }
+    let page = governing_page(db, item).await?;
+    Ok(viewer.passes(db, page.id, "update").await? && can_view(db, user, item).await?)
+}
+
+/// Keeps the content the user may see: in spaces they can read, and not hidden from them by
+/// page restrictions.
+pub async fn retain_visible(
+    db: &SqlitePool,
+    user: &User,
+    items: &mut Vec<Content>,
+) -> WikiResult<()> {
+    retain_readable(db, user, items).await?;
+    let mut kept = Vec::with_capacity(items.len());
+    for item in items.drain(..) {
+        if can_view(db, user, &item).await? {
+            kept.push(item);
+        }
+    }
+    *items = kept;
     Ok(())
 }

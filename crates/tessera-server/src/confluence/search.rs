@@ -64,10 +64,11 @@ async fn compile(
     Ok(compiled)
 }
 
-/// Ids of current content matching the query, in order.
-async fn content_ids(state: &AppState, compiled: &Compiled) -> WikiResult<Vec<i64>> {
+/// Ids of current content matching the query, in order, without content that page
+/// restrictions hide from the user.
+async fn content_ids(state: &AppState, user: &User, compiled: &Compiled) -> WikiResult<Vec<i64>> {
     // Safe: the CQL compiler emits only its own SQL text. Every user-supplied value is bound.
-    Ok(sqlx::query_scalar_with(
+    let ids: Vec<i64> = sqlx::query_scalar_with(
         sqlx::AssertSqlSafe(format!(
             "SELECT c.id FROM content c JOIN spaces s ON s.id = c.space_id
              WHERE c.status = 'current' AND {} ORDER BY {}",
@@ -76,7 +77,14 @@ async fn content_ids(state: &AppState, compiled: &Compiled) -> WikiResult<Vec<i6
         arguments(compiled),
     )
     .fetch_all(&state.db)
-    .await?)
+    .await?;
+    let mut visible = Vec::with_capacity(ids.len());
+    for found in load(state, &ids).await? {
+        if access::can_view(&state.db, user, &found).await? {
+            visible.push(found.id);
+        }
+    }
+    Ok(visible)
 }
 
 async fn space_ids(state: &AppState, compiled: &Compiled) -> WikiResult<Vec<i64>> {
@@ -119,7 +127,7 @@ pub async fn content_search(
     let cql_text = required_cql(&params)?;
     let (start, limit) = params.page(25, 200);
     let compiled = compile(&state, &user, &cql_text, Target::Content).await?;
-    let ids = content_ids(&state, &compiled).await?;
+    let ids = content_ids(&state, &user, &compiled).await?;
     let more = ids.len() as i64 > start + limit;
     let page: Vec<i64> = ids
         .into_iter()
@@ -127,7 +135,7 @@ pub async fn content_search(
         .take(limit as usize)
         .collect();
     let expand = params.expand();
-    let mut ctx = WikiCtx::new(&state);
+    let mut ctx = WikiCtx::new(&state, &user);
     let mut results = Vec::with_capacity(page.len());
     for found in load(&state, &page).await? {
         results.push(ctx.content(&found, &expand).await?);
@@ -172,14 +180,14 @@ pub async fn search(
         );
     }
     hits.extend(
-        content_ids(&state, &compiled)
+        content_ids(&state, &user, &compiled)
             .await?
             .into_iter()
             .map(|id| (false, id)),
     );
     let total = hits.len() as i64;
     let expand = params.expand();
-    let mut ctx = WikiCtx::new(&state);
+    let mut ctx = WikiCtx::new(&state, &user);
     let mut results = Vec::new();
     for (is_space, id) in hits.into_iter().skip(start as usize).take(limit as usize) {
         if is_space {

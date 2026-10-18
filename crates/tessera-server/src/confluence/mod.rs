@@ -9,6 +9,7 @@ mod content;
 pub mod cql;
 pub mod error;
 pub mod render;
+mod restrictions;
 mod search;
 pub mod service;
 mod spaces;
@@ -79,6 +80,39 @@ fn v1() -> Router<AppState> {
         .route(
             "/content/{id}/descendant/{kind}",
             get(content::descendants_of_type),
+        )
+        .route(
+            "/content/{id}/restriction",
+            get(restrictions::list)
+                .put(restrictions::replace)
+                .post(restrictions::add)
+                .delete(restrictions::clear),
+        )
+        .route(
+            "/content/{id}/restriction/byOperation",
+            get(restrictions::by_operation),
+        )
+        .route(
+            "/content/{id}/restriction/byOperation/{operation}",
+            get(restrictions::one_operation),
+        )
+        .route(
+            "/content/{id}/restriction/byOperation/{operation}/user",
+            get(restrictions::user_status)
+                .put(restrictions::user_add)
+                .delete(restrictions::user_remove),
+        )
+        .route(
+            "/content/{id}/restriction/byOperation/{operation}/group/{name}",
+            get(restrictions::group_status)
+                .put(restrictions::group_add)
+                .delete(restrictions::group_remove),
+        )
+        .route(
+            "/content/{id}/restriction/byOperation/{operation}/byGroupId/{name}",
+            get(restrictions::group_status)
+                .put(restrictions::group_add)
+                .delete(restrictions::group_remove),
         )
         .route("/content/{id}/history", get(content::history))
         .route(
@@ -182,7 +216,7 @@ async fn current_user(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
 ) -> WikiResult<Json<Value>> {
-    Ok(Json(WikiCtx::new(&state).user(&user)))
+    Ok(Json(WikiCtx::new(&state, &user).user(&user)))
 }
 
 async fn user(
@@ -198,7 +232,7 @@ async fn user(
         .ok_or_else(|| {
             WikiError::not_found(format!("No user found with accountId : {account_id}"))
         })?;
-    Ok(Json(WikiCtx::new(&state).user(&user)))
+    Ok(Json(WikiCtx::new(&state, &user).user(&user)))
 }
 
 async fn system_info(CurrentUser(_): CurrentUser) -> Json<Value> {

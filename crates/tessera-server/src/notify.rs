@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use crate::AppState;
 use crate::api::access::Access;
-use crate::confluence::access::SpaceAccess;
+use crate::confluence::access::{SpaceAccess, can_view};
 use crate::store::content::Content;
 use crate::store::issues::Issue;
 use crate::store::users::{self, User};
@@ -168,6 +168,7 @@ async fn queue_wiki(
         if SpaceAccess::load(&state.db, &user, space.id)
             .await?
             .can("read", "space")
+            && can_view(&state.db, &user, page).await?
         {
             outbox::enqueue(&state.db, &user.email, &subject, &body).await?;
         }

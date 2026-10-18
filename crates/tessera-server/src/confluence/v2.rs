@@ -461,7 +461,7 @@ async fn space_items(
     params: &Params,
 ) -> V2Result<Value> {
     let space = find_space_by_id(state, user, id).await?;
-    let items = if kind == "page" && params.get("depth") == Some("root") {
+    let mut items = if kind == "page" && params.get("depth") == Some("root") {
         content::root_pages(&state.db, space.id).await?
     } else {
         content::list(
@@ -476,6 +476,7 @@ async fn space_items(
         )
         .await?
     };
+    super::access::retain_visible(&state.db, user, &mut items).await?;
     let format = body_format(params)?;
     let mut ctx = V2Ctx::new(state);
     let mut out = Vec::with_capacity(items.len());
@@ -544,7 +545,7 @@ async fn list_items(state: &AppState, user: &User, kind: &str, params: &Params) 
             .await?,
         );
     }
-    super::access::retain_readable(&state.db, user, &mut items).await?;
+    super::access::retain_visible(&state.db, user, &mut items).await?;
     items.retain(|c| {
         (ids.is_empty() || ids.contains(&c.id))
             && (space_ids.is_empty() || space_ids.contains(&c.space_id))
@@ -820,8 +821,9 @@ async fn children(
     params: Params,
 ) -> V2Result<Json<Value>> {
     let page = find_item(&state, &user, &id, true).await?;
-    let items: Vec<Value> = content::children(&state.db, page.id, "page")
-        .await?
+    let mut kids = content::children(&state.db, page.id, "page").await?;
+    super::access::retain_visible(&state.db, &user, &mut kids).await?;
+    let items: Vec<Value> = kids
         .iter()
         .map(|c| {
             json!({
@@ -859,6 +861,10 @@ async fn descendants(
         .map(|c| (c, 1))
         .collect();
     while let Some((node, depth)) = stack.pop() {
+        // A page hidden by its restrictions hides its whole subtree.
+        if !super::access::can_view(&state.db, &user, &node).await? {
+            continue;
+        }
         if depth < max_depth {
             let kids = content::children(&state.db, node.id, "page").await?;
             stack.extend(kids.into_iter().rev().map(|c| (c, depth + 1)));
@@ -1021,7 +1027,7 @@ async fn list_footer_comments(
         },
     )
     .await?;
-    super::access::retain_readable(&state.db, &user, &mut all).await?;
+    super::access::retain_visible(&state.db, &user, &mut all).await?;
     Ok(Json(
         comments_page(&state, &all, &params, "/footer-comments").await?,
     ))

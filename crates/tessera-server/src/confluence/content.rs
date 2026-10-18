@@ -120,7 +120,7 @@ pub async fn create(
         }
     };
     Ok(Json(
-        WikiCtx::new(&state)
+        WikiCtx::new(&state, &user)
             .content(&created, &write_expand(&params))
             .await?,
     ))
@@ -144,7 +144,7 @@ pub async fn list(
         match crate::store::spaces::by_key(&state.db, key).await? {
             Some(space) => filter.space_id = Some(space.id),
             None => {
-                return Ok(Json(WikiCtx::new(&state).collection(
+                return Ok(Json(WikiCtx::new(&state, &user).collection(
                     Vec::new(),
                     start,
                     limit,
@@ -162,10 +162,10 @@ pub async fn list(
         filter.created_before = Some(from + 86_400_000);
     }
     let mut all = content::list(&state.db, &filter).await?;
-    access::retain_readable(&state.db, &user, &mut all).await?;
+    access::retain_visible(&state.db, &user, &mut all).await?;
     let more = all.len() as i64 > start + limit;
     let expand = params.expand();
-    let mut ctx = WikiCtx::new(&state);
+    let mut ctx = WikiCtx::new(&state, &user);
     let mut results = Vec::new();
     for item in all.iter().skip(start as usize).take(limit as usize) {
         results.push(ctx.content(item, &expand).await?);
@@ -206,7 +206,9 @@ pub async fn get(
         Some(_) => params.expand(),
         None => Expand::parse(Some("space,history,version")),
     };
-    Ok(Json(WikiCtx::new(&state).content(&found, &expand).await?))
+    Ok(Json(
+        WikiCtx::new(&state, &user).content(&found, &expand).await?,
+    ))
 }
 
 /// `PUT /content/{id}`: saves a new version. The version number must be one more than the
@@ -247,7 +249,7 @@ pub async fn update(
     };
     let updated = service::save(&state, &user, &found, save).await?;
     Ok(Json(
-        WikiCtx::new(&state)
+        WikiCtx::new(&state, &user)
             .content(&updated, &write_expand(&params))
             .await?,
     ))
@@ -278,7 +280,7 @@ pub async fn children(
 ) -> WikiResult<Json<Value>> {
     let found = find_current(&state, &user, &id).await?;
     Ok(Json(
-        WikiCtx::new(&state)
+        WikiCtx::new(&state, &user)
             .children(&found, &params.expand())
             .await?,
     ))
@@ -286,6 +288,7 @@ pub async fn children(
 
 async fn list_of(
     state: &AppState,
+    user: &User,
     items: Vec<Content>,
     params: &Params,
     path: String,
@@ -293,7 +296,7 @@ async fn list_of(
     let (start, limit) = params.page(25, 500);
     let more = items.len() as i64 > start + limit;
     let expand = params.expand();
-    let mut ctx = WikiCtx::new(state);
+    let mut ctx = WikiCtx::new(state, user);
     let mut results = Vec::new();
     for item in items.iter().skip(start as usize).take(limit as usize) {
         results.push(ctx.content(item, &expand).await?);
@@ -310,12 +313,12 @@ pub async fn children_of_type(
     let found = find_current(&state, &user, &id).await?;
     // `depth=all` lists replies along with top-level comments.
     let items = if kind == "comment" && params.get("depth") == Some("all") {
-        render::descendant_list(&state.db, &found, &kind).await?
+        render::descendant_list(&state.db, &user, &found, &kind).await?
     } else {
-        render::child_list(&state.db, &found, &kind).await?
+        render::child_list(&state.db, &user, &found, &kind).await?
     };
     let path = format!("/content/{id}/child/{kind}");
-    Ok(Json(list_of(&state, items, &params, path).await?))
+    Ok(Json(list_of(&state, &user, items, &params, path).await?))
 }
 
 pub async fn descendants(
@@ -326,10 +329,10 @@ pub async fn descendants(
 ) -> WikiResult<Json<Value>> {
     let found = find_current(&state, &user, &id).await?;
     let expand = params.expand().with("page").with("comment");
-    let mut ctx = WikiCtx::new(&state);
+    let mut ctx = WikiCtx::new(&state, &user);
     let mut out = serde_json::Map::new();
     for kind in ["page", "comment"] {
-        let items = render::descendant_list(&state.db, &found, kind).await?;
+        let items = render::descendant_list(&state.db, &user, &found, kind).await?;
         let mut results = Vec::new();
         for item in &items {
             results.push(ctx.content(item, &expand.below(kind)).await?);
@@ -351,9 +354,9 @@ pub async fn descendants_of_type(
     params: Params,
 ) -> WikiResult<Json<Value>> {
     let found = find_current(&state, &user, &id).await?;
-    let items = render::descendant_list(&state.db, &found, &kind).await?;
+    let items = render::descendant_list(&state.db, &user, &found, &kind).await?;
     let path = format!("/content/{id}/descendant/{kind}");
-    Ok(Json(list_of(&state, items, &params, path).await?))
+    Ok(Json(list_of(&state, &user, items, &params, path).await?))
 }
 
 pub async fn history(
@@ -368,7 +371,9 @@ pub async fn history(
         Some(_) => params.expand(),
         None => Expand::parse(Some("lastUpdated")),
     };
-    Ok(Json(WikiCtx::new(&state).history(&found, &expand).await?))
+    Ok(Json(
+        WikiCtx::new(&state, &user).history(&found, &expand).await?,
+    ))
 }
 
 pub async fn versions(
@@ -381,7 +386,7 @@ pub async fn versions(
     let (start, limit) = params.page(200, 200);
     let all = content::versions(&state.db, found.id).await?;
     let more = all.len() as i64 > start + limit;
-    let mut ctx = WikiCtx::new(&state);
+    let mut ctx = WikiCtx::new(&state, &user);
     let mut results = Vec::new();
     for version in all.iter().skip(start as usize).take(limit as usize) {
         results.push(ctx.version(version, &found).await?);
@@ -404,7 +409,11 @@ pub async fn version(
     let version = content::version(&state.db, found.id, number)
         .await?
         .ok_or_else(|| WikiError::not_found(format!("No version {number} of content {id}")))?;
-    Ok(Json(WikiCtx::new(&state).version(&version, &found).await?))
+    Ok(Json(
+        WikiCtx::new(&state, &user)
+            .version(&version, &found)
+            .await?,
+    ))
 }
 
 /// `POST /content/{id}/version` with `operationKey: restore` saves an old version as the newest.
@@ -438,7 +447,11 @@ pub async fn restore_version(
     let latest = content::version(&state.db, updated.id, updated.version)
         .await?
         .expect("the new version exists");
-    Ok(Json(WikiCtx::new(&state).version(&latest, &updated).await?))
+    Ok(Json(
+        WikiCtx::new(&state, &user)
+            .version(&latest, &updated)
+            .await?,
+    ))
 }
 
 pub async fn labels(
@@ -454,7 +467,7 @@ pub async fn labels(
     }
     let (start, limit) = params.page(200, 200);
     let more = list.len() as i64 > start + limit;
-    let ctx = WikiCtx::new(&state);
+    let ctx = WikiCtx::new(&state, &user);
     let results = list
         .iter()
         .skip(start as usize)
@@ -512,7 +525,7 @@ pub async fn add_labels(
         }
         labels::add(&state.db, found.id, prefix, &name).await?;
     }
-    Ok(Json(WikiCtx::new(&state).labels(found.id).await?))
+    Ok(Json(WikiCtx::new(&state, &user).labels(found.id).await?))
 }
 
 async fn remove_label_named(
@@ -562,6 +575,9 @@ pub async fn move_page(
     let page = find_current(&state, &user, &id).await?;
     let target = find_current(&state, &user, &target).await?;
     access::require(&state.db, &user, page.space_id, "create", "page").await?;
+    if !access::can_edit(&state.db, &user, &page).await? {
+        return Err(access::denied("move", "page"));
+    }
     if page.content_type != "page" || target.content_type != "page" {
         return Err(WikiError::bad_request("Only pages can be moved"));
     }

@@ -81,6 +81,15 @@ check("cql search", [r["content"]["title"] for r in results["results"]] == ["Ins
 pages = wiki.get_all_pages_from_space("COMPAT", start=0, limit=50)
 check("pages in space", {p["title"] for p in pages} == {"Compat Space Home", "Getting started", "Install"})
 
+me = wiki.get("rest/api/user/current")["accountId"]
+wiki.put(
+    "rest/api/content/{}/restriction".format(page_id),
+    data=[{"operation": "update", "restrictions": {"user": [{"type": "known", "accountId": me}]}}],
+)
+restrictions = wiki.get_all_restrictions_for_content(page_id)
+check("restrictions", [u["accountId"] for u in restrictions["update"]["restrictions"]["user"]["results"]] == [me])
+check("no view restrictions", restrictions["read"]["restrictions"]["user"]["size"] == 0)
+
 wiki.remove_page(child["id"])
 check("page trashed", not wiki.page_exists("COMPAT", "Install"))
 

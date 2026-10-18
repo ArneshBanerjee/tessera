@@ -2,6 +2,7 @@
 
 pub mod editor;
 pub mod page;
+mod restrictions;
 pub mod space_settings;
 
 use leptos::prelude::*;

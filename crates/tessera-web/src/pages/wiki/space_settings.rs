@@ -22,11 +22,12 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("delete", "page", "Delete pages"),
     ("delete", "comment", "Delete comments"),
     ("delete", "attachment", "Delete files"),
+    ("restrict_content", "space", "Restrict"),
     ("administer", "space", "Admin"),
 ];
 
 /// Who a permission is for, as shown in a row: (type, identifier, label).
-type Subject = (String, String, String);
+pub(super) type Subject = (String, String, String);
 
 /// Permission ids by subject and by (operation, target).
 type Grid = BTreeMap<Subject, BTreeMap<(String, String), i64>>;
@@ -212,23 +213,30 @@ fn Details(found: Value) -> impl IntoView {
     }
 }
 
-/// Adds a user or a group as a new row, starting with permission to view the space.
+/// Picks a user or a group to add as a new row.
 #[component]
-fn AddSubject(on_add: Callback<Subject>) -> impl IntoView {
+pub(super) fn AddSubject(on_add: Callback<Subject>) -> impl IntoView {
     let users = users_resource();
     let picked = RwSignal::new(None::<String>);
     let group = RwSignal::new(String::new());
     let add_user = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         if let Some(account) = picked.get() {
-            on_add.run(("user".into(), account, String::new()));
+            let name = users
+                .get()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|u| u.account_id == account)
+                .map(|u| u.display_name)
+                .unwrap_or_default();
+            on_add.run(("user".into(), account, name));
         }
     };
     let add_group = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let name = group.get().trim().to_string();
         if !name.is_empty() {
-            on_add.run(("group".into(), name, String::new()));
+            on_add.run(("group".into(), name.clone(), format!("{name} (group)")));
             group.set(String::new());
         }
     };

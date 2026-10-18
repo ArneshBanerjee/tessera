@@ -15,6 +15,7 @@ use crate::AppState;
 use crate::api::extract::Json;
 use crate::auth::CurrentUser;
 use crate::store::content::{self, Content};
+use crate::store::users::User;
 use crate::store::wiki_files;
 
 /// One file part of a multipart upload, with the comment sent for it.
@@ -107,6 +108,7 @@ async fn attach_parts(
 
 async fn render_list(
     state: &AppState,
+    user: &User,
     items: &[Content],
     params: &Params,
     path: &str,
@@ -114,7 +116,7 @@ async fn render_list(
     let (start, limit) = params.page(50, 500);
     let more = items.len() as i64 > start + limit;
     let expand = params.expand();
-    let mut ctx = WikiCtx::new(state);
+    let mut ctx = WikiCtx::new(state, user);
     let mut results = Vec::new();
     for item in items.iter().skip(start as usize).take(limit as usize) {
         results.push(ctx.content(item, &expand).await?);
@@ -147,7 +149,9 @@ pub async fn list(
         items = kept;
     }
     let path = format!("/content/{id}/child/attachment");
-    Ok(Json(render_list(&state, &items, &params, &path).await?))
+    Ok(Json(
+        render_list(&state, &user, &items, &params, &path).await?,
+    ))
 }
 
 /// `POST /content/{id}/child/attachment`: new attachments. A taken name is an error.
@@ -164,7 +168,9 @@ pub async fn create(
     let (parts, minor_edit) = read_parts(multipart).await?;
     let saved = attach_parts(&state, &user, &container, parts, minor_edit, false).await?;
     let path = format!("/content/{id}/child/attachment");
-    Ok(Json(render_list(&state, &saved, &params, &path).await?))
+    Ok(Json(
+        render_list(&state, &user, &saved, &params, &path).await?,
+    ))
 }
 
 /// `PUT /content/{id}/child/attachment`: new attachments, or new versions of existing ones.
@@ -181,7 +187,9 @@ pub async fn create_or_update(
     let (parts, minor_edit) = read_parts(multipart).await?;
     let saved = attach_parts(&state, &user, &container, parts, minor_edit, true).await?;
     let path = format!("/content/{id}/child/attachment");
-    Ok(Json(render_list(&state, &saved, &params, &path).await?))
+    Ok(Json(
+        render_list(&state, &user, &saved, &params, &path).await?,
+    ))
 }
 
 /// `POST /content/{id}/child/attachment/{attachmentId}/data`: a new version of one attachment.
@@ -211,7 +219,7 @@ pub async fn update_data(
     };
     let saved = service::attach(&state, &user, &container, Some(&attachment), upload).await?;
     Ok(Json(
-        WikiCtx::new(&state)
+        WikiCtx::new(&state, &user)
             .content(&saved, &params.expand())
             .await?,
     ))
