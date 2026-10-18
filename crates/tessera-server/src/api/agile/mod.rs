@@ -8,6 +8,7 @@
 mod boards;
 mod epics;
 mod issues;
+pub mod quick_filters;
 pub mod reports;
 mod sprints;
 
@@ -39,6 +40,8 @@ pub fn router() -> Router<AppState> {
         .route("/board/filter/{filter_id}", get(boards::by_filter))
         .route("/board/{id}", get(boards::get).delete(boards::delete))
         .route("/board/{id}/configuration", get(boards::configuration))
+        .route("/board/{id}/quickfilter", get(quick_filters::list))
+        .route("/board/{id}/quickfilter/{filter}", get(quick_filters::get))
         .route("/board/{id}/issue", get(boards::issues))
         .route("/board/{id}/backlog", get(boards::backlog))
         .route("/board/{id}/sprint", get(boards::sprints))
@@ -54,7 +57,6 @@ pub fn router() -> Router<AppState> {
         .route("/board/{id}/epic/{epic_id}/issue", get(boards::epic_issues))
         .route("/board/{id}/project", get(boards::projects))
         .route("/board/{id}/version", get(boards::versions))
-        .route("/board/{id}/quickfilter", get(boards::quick_filters))
         .route("/board/{id}/features", get(boards::features))
         .route("/board/{id}/properties", get(boards::property_keys))
         .route(

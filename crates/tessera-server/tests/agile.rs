@@ -484,3 +484,45 @@ async fn board_properties_and_swap() {
         .await;
     assert_eq!(sprints["values"][0]["name"], "B");
 }
+
+#[tokio::test]
+async fn quick_filters() {
+    let (app, board) = scrum().await;
+    let path = format!("/rest/agile/1.0/board/{board}/quickfilter");
+    let (_, list) = app.get(&path).await;
+    let names: Vec<&str> = list["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Only My Issues", "Recently Updated"]);
+
+    let manage = format!("/rest/tessera/1.0/board/{board}/quickfilter");
+    let (status, _) = app
+        .post(&manage, json!({ "name": "Broken", "jql": "status = = x" }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "the JQL must parse");
+    let (status, created) = app
+        .post(
+            &manage,
+            json!({ "name": "First only", "jql": "summary ~ First" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["position"], 2);
+
+    // Boards apply a quick filter's JQL through the jql parameter.
+    let jql = form_urlencoded::byte_serialize(created["jql"].as_str().unwrap().as_bytes())
+        .collect::<String>();
+    let (_, issues) = app
+        .get(&format!("/rest/agile/1.0/board/{board}/issue?jql={jql}"))
+        .await;
+    assert_eq!(keys(&issues), ["SCRUM-1"]);
+
+    let id = created["id"].as_i64().unwrap();
+    let (status, _) = app.delete(&format!("{manage}/{id}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, list) = app.get(&path).await;
+    assert_eq!(list["total"], 2);
+}

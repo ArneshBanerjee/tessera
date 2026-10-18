@@ -52,6 +52,60 @@ async fn agile_issues(path: &str) -> Vec<Issue> {
         .unwrap_or_default()
 }
 
+/// The `jql` parameter for a board query: `base` and every active quick filter, all required.
+fn jql_param(base: Option<&str>, active: &[String]) -> String {
+    let parts: Vec<String> = base
+        .into_iter()
+        .map(str::to_string)
+        .chain(active.iter().map(|q| format!("({q})")))
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("&jql={}", api::encode(&parts.join(" AND ")))
+    }
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
+#[serde(default)]
+struct QuickFilter {
+    name: String,
+    jql: String,
+}
+
+/// The board's quick filters as toggle buttons. `active` holds the JQL of those switched on.
+#[component]
+fn QuickFilterBar(board_id: i64, active: RwSignal<Vec<String>>) -> impl IntoView {
+    let filters = LocalResource::new(move || async move {
+        api::get::<Page<QuickFilter>>(&format!("{}/board/{board_id}/quickfilter", api::AGILE))
+            .await
+            .map(|p| p.values)
+            .unwrap_or_default()
+    });
+    view! {
+        <div class="quick-filters" role="group" aria-label="Quick filters">
+            {move || filters.get().unwrap_or_default().into_iter().map(|filter| {
+                let jql = filter.jql.clone();
+                let on = {
+                    let jql = jql.clone();
+                    move || active.get().contains(&jql)
+                };
+                view! {
+                    <button class="quick-filter" class:on=on.clone() aria-pressed=move || on().to_string()
+                        on:click=move |_| {
+                            let jql = jql.clone();
+                            active.update(|list| {
+                                if let Some(i) = list.iter().position(|q| *q == jql) { list.remove(i); } else { list.push(jql); }
+                            });
+                        }>
+                        {filter.name}
+                    </button>
+                }
+            }).collect_view()}
+        </div>
+    }
+}
+
 /// A card on the board.
 #[component]
 fn Card(
@@ -128,14 +182,13 @@ fn BoardView(board: Board) -> impl IntoView {
             .and_then(|page| page.values.into_iter().next())
         }
     });
+    let quick = RwSignal::new(Vec::<String>::new());
     let issues = LocalResource::new(move || {
         session.changes.track();
+        let active = quick.get();
         async move {
-            let jql = if scrum {
-                "&jql=sprint%20in%20openSprints()"
-            } else {
-                ""
-            };
+            let base = scrum.then_some("sprint in openSprints()");
+            let jql = jql_param(base, &active);
             agile_issues(&format!("/board/{board_id}/issue?fields=*all{jql}")).await
         }
     });
@@ -218,6 +271,7 @@ fn BoardView(board: Board) -> impl IntoView {
                     <button class="button" on:click=move |_| completing.set(true)>"Complete sprint"</button>
                 })}
             </header>
+            <QuickFilterBar board_id=board_id active=quick/>
             <ErrorText error=error/>
             {move || (scrum && active_sprint.get().is_some_and(|s| s.is_none())).then(|| view! {
                 <p class="empty">"No sprint is active. Start a sprint from the " <A href="../backlog">"backlog"</A> "."</p>
@@ -330,9 +384,11 @@ fn BacklogView(board: Board) -> impl IntoView {
             .unwrap_or_default()
         }
     });
+    let quick = RwSignal::new(Vec::<String>::new());
     let backlog = LocalResource::new(move || {
         session.changes.track();
-        async move { agile_issues(&format!("/board/{board_id}/backlog?fields=*all")).await }
+        let jql = jql_param(None, &quick.get());
+        async move { agile_issues(&format!("/board/{board_id}/backlog?fields=*all{jql}")).await }
     });
     let fields = agile_fields();
     let dragging = RwSignal::new(None::<String>);
@@ -378,13 +434,14 @@ fn BacklogView(board: Board) -> impl IntoView {
                 <h1>"Backlog"</h1>
                 <button class="button" on:click=create_sprint>"Create sprint"</button>
             </header>
+            <QuickFilterBar board_id=board_id active=quick/>
             <ErrorText error=error/>
             {move || {
                 let agile = fields.get().unwrap_or_default();
                 let any_active = sprints.get().unwrap_or_default().iter().any(|s| s.state == "active");
                 sprints.get().unwrap_or_default().into_iter().map(|sprint| {
                     let agile = agile.clone();
-                    view! { <SprintSection sprint=sprint any_active=any_active agile=agile dragging=dragging move_to=move_to starting=starting/> }
+                    view! { <SprintSection sprint=sprint any_active=any_active agile=agile dragging=dragging move_to=move_to starting=starting quick=quick/> }
                 }).collect_view()
             }}
             <section class="backlog-list"
@@ -417,12 +474,15 @@ fn SprintSection(
     dragging: RwSignal<Option<String>>,
     move_to: Callback<Target>,
     starting: RwSignal<Option<Sprint>>,
+    /// The JQL of the active quick filters.
+    quick: RwSignal<Vec<String>>,
 ) -> impl IntoView {
     let session = use_session();
     let id = sprint.id;
     let issues = LocalResource::new(move || {
         session.changes.track();
-        async move { agile_issues(&format!("/sprint/{id}/issue?fields=*all")).await }
+        let jql = jql_param(None, &quick.get());
+        async move { agile_issues(&format!("/sprint/{id}/issue?fields=*all{jql}")).await }
     });
     let active = sprint.state == "active";
     let dates = match (&sprint.start_date, &sprint.end_date) {

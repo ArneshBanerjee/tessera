@@ -72,6 +72,7 @@ pub async fn create(
                 .await?;
         }
     }
+    super::quick_filters::add_defaults(&mut tx, board.id).await?;
     tx.commit().await?;
     Ok(board)
 }

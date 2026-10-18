@@ -608,17 +608,6 @@ pub async fn versions(
     Ok(Json(page(values, query.start_at, query.max_results)))
 }
 
-/// Quick filters are not configurable yet, so every board has none.
-pub async fn quick_filters(
-    State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
-    Path(id): Path<String>,
-    Query(query): Query<PageQuery>,
-) -> ApiResult<Json<Value>> {
-    find_board(&state, &id).await?;
-    Ok(Json(page(Vec::new(), query.start_at, query.max_results)))
-}
-
 /// Which board features are on: sprints and the backlog for scrum boards; estimation always.
 pub async fn features(
     State(state): State<AppState>,

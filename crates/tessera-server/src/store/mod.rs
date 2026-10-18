@@ -19,6 +19,7 @@ pub mod outbox;
 pub mod permissions;
 pub mod projects;
 pub mod properties;
+pub mod quick_filters;
 pub mod ranks;
 pub mod social;
 pub mod space_permissions;

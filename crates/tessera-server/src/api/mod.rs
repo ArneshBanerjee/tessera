@@ -86,7 +86,9 @@ pub fn router() -> Router<AppState> {
         .nest("/rest/agile/1.0", agile::router())
         .nest(
             "/rest/tessera/1.0",
-            account::router().merge(agile::reports::tessera_router()),
+            account::router()
+                .merge(agile::reports::tessera_router())
+                .merge(agile::quick_filters::tessera_router()),
         )
         .nest(
             "/rest/greenhopper/1.0",

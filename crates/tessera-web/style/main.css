@@ -378,3 +378,9 @@ textarea.input { resize: vertical; }
 .report-heading { display: flex; justify-content: space-between; align-items: baseline; margin: 18px 0 6px; }
 .reports-page { max-width: 960px; }
 .sprint-picker { width: auto; }
+
+/* Quick filters */
+.quick-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 14px; }
+.quick-filter { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 14px; padding: 3px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.quick-filter:hover { background: var(--surface-sunken); }
+.quick-filter.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary-strong); font-weight: 600; }
