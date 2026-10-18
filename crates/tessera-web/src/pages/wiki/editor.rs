@@ -73,6 +73,8 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
     let error = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
     let editing = StoredValue::new(id.clone());
+    // Labels the chosen template gives the new page.
+    let template_labels = RwSignal::new(Vec::<String>::new());
 
     // An edit starts from the saved page.
     if let Some(id) = id.clone() {
@@ -142,8 +144,19 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
             saving.set(false);
             match result {
                 Ok(page) => {
-                    session.changed();
                     let id = page["id"].as_str().unwrap_or_default().to_string();
+                    let labels = template_labels.get_untracked();
+                    if editing.get_value().is_none() && !labels.is_empty() {
+                        let names: Vec<Value> = labels
+                            .iter()
+                            .map(|name| json!({ "prefix": "global", "name": name }))
+                            .collect();
+                        let path = format!("{}/content/{id}/label", api::WIKI);
+                        if let Err(e) = api::post::<Value>(&path, &json!(names)).await {
+                            error.set(Some(e.message));
+                        }
+                    }
+                    session.changed();
                     navigate(&content_path(&found.key, kind, &id), Default::default());
                 }
                 Err(e) if e.status == 409 => error.set(Some(format!(
@@ -154,8 +167,14 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
             }
         });
     };
+    let starting = editing.get_value().is_none() && kind == "page";
+    let on_template = Callback::new(move |(text, labels): (String, Vec<String>)| {
+        markdown.set(text);
+        template_labels.set(labels);
+    });
     view! {
         <div class="page wiki-page editor-page">
+            {starting.then(|| view! { <TemplatePicker on_pick=on_template/> })}
             <input class="input title-input" node_ref=autofocus()
                 placeholder=if kind == "blogpost" { "Give this blog post a title" } else { "Give this page a title" }
                 prop:value=move || title.get()
@@ -172,6 +191,99 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
                     {move || if editing.get_value().is_some() { "Update" } else { "Publish" }}
                 </button>
             </div>
+        </div>
+    }
+}
+
+/// Loads a template's body as Markdown, with the labels it gives pages.
+async fn load_template(id: &str) -> api::ApiResult<(String, Vec<String>)> {
+    let template: Value = api::get(&format!("{}/template/{id}", api::WIKI)).await?;
+    let storage = template["body"]["storage"]["value"]
+        .as_str()
+        .unwrap_or_default();
+    let converted: Value = api::post(
+        &format!("{}/contentbody/convert/atlas_doc_format", api::WIKI),
+        &json!({ "value": storage, "representation": "storage" }),
+    )
+    .await?;
+    let markdown = converted["value"]
+        .as_str()
+        .and_then(|adf| serde_json::from_str::<tessera_adf::Node>(adf).ok())
+        .map(|doc| tessera_adf::to_markdown(&doc))
+        .unwrap_or_default();
+    let labels = template["labels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l["name"].as_str().map(str::to_string))
+        .collect();
+    Ok((markdown, labels))
+}
+
+/// Starts a new page from a template: the space's own, global ones, or Tessera's blueprints.
+#[component]
+fn TemplatePicker(on_pick: Callback<(String, Vec<String>)>) -> impl IntoView {
+    let space = use_space();
+    let error = RwSignal::new(None::<String>);
+    let groups = LocalResource::new(move || {
+        let key = space.key.get();
+        async move {
+            let list = |path: String| async move {
+                api::get::<Value>(&path)
+                    .await
+                    .ok()
+                    .and_then(|v| v["results"].as_array().cloned())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|t| {
+                        (
+                            t["templateId"].as_str().unwrap_or_default().to_string(),
+                            t["name"].as_str().unwrap_or_default().to_string(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            vec![
+                (
+                    "This space",
+                    list(format!("{}/template/page?spaceKey={key}", api::WIKI)).await,
+                ),
+                ("Global", list(format!("{}/template/page", api::WIKI)).await),
+                (
+                    "Blueprints",
+                    list(format!("{}/template/blueprint", api::WIKI)).await,
+                ),
+            ]
+        }
+    });
+    let pick = move |id: String| {
+        if id.is_empty() {
+            on_pick.run((String::new(), Vec::new()));
+            return;
+        }
+        spawn_local(async move {
+            match load_template(&id).await {
+                Ok(picked) => {
+                    error.set(None);
+                    on_pick.run(picked);
+                }
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    view! {
+        <div class="template-picker">
+            <label class="small muted">"Start from"
+                <select class="select" aria-label="Template" on:change:target=move |ev| pick(ev.target().value())>
+                    <option value="">"Blank page"</option>
+                    {move || groups.get().map(|groups| groups.into_iter().filter(|(_, items)| !items.is_empty()).map(|(label, items)| view! {
+                        <optgroup label=label>
+                            {items.into_iter().map(|(id, name)| view! { <option value=id>{name}</option> }).collect_view()}
+                        </optgroup>
+                    }).collect_view())}
+                </select>
+            </label>
+            <ErrorText error=error/>
         </div>
     }
 }

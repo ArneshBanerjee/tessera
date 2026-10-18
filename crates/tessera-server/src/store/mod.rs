@@ -28,6 +28,7 @@ pub mod social;
 pub mod space_permissions;
 pub mod spaces;
 pub mod sprints;
+pub mod templates;
 pub mod users;
 pub mod versions;
 pub mod wiki_files;

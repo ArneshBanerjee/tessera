@@ -13,6 +13,7 @@ mod restrictions;
 mod search;
 pub mod service;
 mod spaces;
+mod templates;
 mod v2;
 mod watch;
 
@@ -151,6 +152,13 @@ fn v1() -> Router<AppState> {
         .route("/user", get(user))
         .route("/settings/systemInfo", get(system_info))
         .route("/longtask/{id}", get(long_task))
+        .route("/template", post(templates::create).put(templates::update))
+        .route("/template/page", get(templates::page_templates))
+        .route("/template/blueprint", get(templates::blueprints))
+        .route(
+            "/template/{id}",
+            get(templates::get).delete(templates::delete),
+        )
         .route("/contentbody/convert/{to}", post(convert_body))
 }
 
@@ -280,6 +288,9 @@ async fn convert_body(
     }
     let converted = match to.as_str() {
         "storage" | "editor" => value.to_string(),
+        "atlas_doc_format" => {
+            serde_json::to_string(&tessera_adf::html::from_storage(value)).expect("ADF serializes")
+        }
         "view" | "export_view" | "styled_view" | "anonymous_export_view" => {
             let names = service::load_names(&state.db).await?;
             service::view_html(

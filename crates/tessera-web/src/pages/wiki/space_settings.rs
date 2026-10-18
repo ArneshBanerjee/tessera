@@ -6,7 +6,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::{Value, json};
 
-use super::use_space;
+use super::{adf_body, use_space};
 use crate::api;
 use crate::app::use_session;
 use crate::components::{ErrorText, UserSelect, users_resource};
@@ -118,6 +118,7 @@ pub fn SpaceSettings() -> impl IntoView {
                         let grid = grid_of(&found);
                         view! {
                             <Details found=found.clone()/>
+                            <Templates/>
                             <section class="settings-card">
                                 <h2>"Permissions"</h2>
                                 <p class="muted small">"Each row is a user or group; each box allows one thing in this space."</p>
@@ -252,5 +253,99 @@ pub(super) fn AddSubject(on_add: Callback<Subject>) -> impl IntoView {
                 <button class="button" type="submit">"Add group"</button>
             </form>
         </div>
+    }
+}
+
+/// The space's page templates: made here, picked when creating a page.
+#[component]
+fn Templates() -> impl IntoView {
+    let session = use_session();
+    let space = use_space();
+    let error = RwSignal::new(None::<String>);
+    let list = LocalResource::new(move || {
+        let key = space.key.get();
+        session.changes.track();
+        async move {
+            api::get::<Value>(&format!("{}/template/page?spaceKey={key}", api::WIKI))
+                .await
+                .ok()
+                .and_then(|v| v["results"].as_array().cloned())
+                .unwrap_or_default()
+        }
+    });
+    let name = RwSignal::new(String::new());
+    let description = RwSignal::new(String::new());
+    let body = RwSignal::new(String::new());
+    let create = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let request = json!({
+            "name": name.get(),
+            "templateType": "page",
+            "description": description.get(),
+            "space": { "key": space.key.get_untracked() },
+            "body": { "atlas_doc_format": adf_body(&body.get()) },
+        });
+        spawn_local(async move {
+            match api::post::<Value>(&format!("{}/template", api::WIKI), &request).await {
+                Ok(_) => {
+                    name.set(String::new());
+                    description.set(String::new());
+                    body.set(String::new());
+                    error.set(None);
+                    session.changed();
+                }
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    let remove = move |id: String| {
+        spawn_local(async move {
+            match api::delete(&format!("{}/template/{id}", api::WIKI)).await {
+                Ok(()) => session.changed(),
+                Err(e) => error.set(Some(e.message)),
+            }
+        });
+    };
+    view! {
+        <section class="settings-card">
+            <h2>"Templates"</h2>
+            <p class="muted small">"People pick these when they create a page in this space."</p>
+            {move || list.get().map(|items| if items.is_empty() {
+                view! { <p class="muted small">"No templates yet."</p> }.into_any()
+            } else {
+                view! {
+                    <ul class="template-list">
+                        {items.into_iter().map(|t| {
+                            let id = t["templateId"].as_str().unwrap_or_default().to_string();
+                            view! {
+                                <li>
+                                    <strong>{t["name"].as_str().unwrap_or_default().to_string()}</strong>
+                                    <span class="muted small">{t["description"].as_str().unwrap_or_default().to_string()}</span>
+                                    <button class="link-button small" on:click=move |_| remove(id.clone())>"Delete"</button>
+                                </li>
+                            }
+                        }).collect_view()}
+                    </ul>
+                }.into_any()
+            })}
+            <form class="form" on:submit=create>
+                <label>"Name"
+                    <input class="input" required prop:value=move || name.get()
+                        on:input:target=move |ev| name.set(ev.target().value())/>
+                </label>
+                <label>"Description"
+                    <input class="input" prop:value=move || description.get()
+                        on:input:target=move |ev| description.set(ev.target().value())/>
+                </label>
+                <label>"Body, in Markdown"
+                    <textarea class="input" rows="6" prop:value=move || body.get()
+                        on:input:target=move |ev| body.set(ev.target().value())></textarea>
+                </label>
+                <ErrorText error=error/>
+                <div class="form-actions">
+                    <button class="button primary" type="submit">"Add template"</button>
+                </div>
+            </form>
+        </section>
     }
 }

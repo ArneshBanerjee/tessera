@@ -1,8 +1,9 @@
 //! Markdown to ADF and back, for editing rich text as Markdown.
 //!
-//! Supported: paragraphs, headings, bullet and numbered lists, code blocks, quotes, rules,
-//! hard breaks, images, and the marks bold, italic, strikethrough, inline code, and links. Other ADF
-//! nodes (panels, mentions, tables) keep their text when written as Markdown.
+//! Supported: paragraphs, headings, bullet and numbered lists, task lists (`- [ ]`), tables
+//! (GitHub's pipe tables), code blocks, quotes, rules, hard breaks, images, and the marks bold,
+//! italic, strikethrough, inline code, and links. Other ADF nodes (panels, mentions, status
+//! lozenges) keep their text when written as Markdown.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde_json::{Map, Value, json};
@@ -31,7 +32,11 @@ fn block(kind: &str) -> Node {
 
 /// Converts Markdown to an ADF document.
 pub fn from_markdown(markdown: &str) -> Node {
-    let parser = Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH);
+    let options =
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
+    let parser = Parser::new_ext(markdown, options);
+    // Whether table cells being read are in the header row.
+    let mut in_table_head = false;
     // Open containers; the last one receives new children.
     let mut stack: Vec<Node> = vec![Node::doc(Vec::new())];
     let mut marks: Vec<Mark> = Vec::new();
@@ -50,7 +55,10 @@ pub fn from_markdown(markdown: &str) -> Node {
     // Inline content outside a paragraph (for example in a tight list item) gets one.
     fn ensure_inline_parent(stack: &mut Vec<Node>) {
         let kind = stack.last().map(|n| n.kind.as_str()).unwrap_or_default();
-        if matches!(kind, "doc" | "listItem" | "blockquote") {
+        if matches!(
+            kind,
+            "doc" | "listItem" | "blockquote" | "tableCell" | "tableHeader"
+        ) {
             stack.push(Node::paragraph(Vec::new()));
         }
     }
@@ -94,6 +102,17 @@ pub fn from_markdown(markdown: &str) -> Node {
                 }
                 Tag::List(None) => stack.push(block("bulletList")),
                 Tag::Item => stack.push(block("listItem")),
+                Tag::Table(_) => stack.push(block("table")),
+                Tag::TableHead => {
+                    in_table_head = true;
+                    stack.push(block("tableRow"));
+                }
+                Tag::TableRow => stack.push(block("tableRow")),
+                Tag::TableCell => stack.push(block(if in_table_head {
+                    "tableHeader"
+                } else {
+                    "tableCell"
+                })),
                 Tag::Emphasis => marks.push(Mark {
                     kind: "em".into(),
                     attrs: None,
@@ -139,8 +158,27 @@ pub fn from_markdown(markdown: &str) -> Node {
                     if stack.last().is_some_and(|n| n.kind == "paragraph") {
                         close(&mut stack);
                     }
+                    // A task item holds its text directly, without paragraphs.
+                    if let Some(item) = stack.last_mut().filter(|n| n.kind == "taskItem") {
+                        item.content = flatten_paragraphs(std::mem::take(&mut item.content));
+                    }
                     close(&mut stack);
                 }
+                TagEnd::TableCell => {
+                    if stack.last().is_some_and(|n| n.kind == "paragraph") {
+                        close(&mut stack);
+                    }
+                    // ADF cells hold at least one paragraph.
+                    if let Some(cell) = stack.last_mut().filter(|n| n.content.is_empty()) {
+                        cell.content.push(Node::paragraph(Vec::new()));
+                    }
+                    close(&mut stack);
+                }
+                TagEnd::TableHead => {
+                    in_table_head = false;
+                    close(&mut stack);
+                }
+                TagEnd::TableRow | TagEnd::Table => close(&mut stack),
                 TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                     marks.pop();
                 }
@@ -186,6 +224,21 @@ pub fn from_markdown(markdown: &str) -> Node {
                 push(&mut stack, Node::hard_break());
             }
             Event::Rule => push(&mut stack, block("rule")),
+            // `- [ ]` and `- [x]`: the item is a task, and its list a task list.
+            Event::TaskListMarker(done) => {
+                let item_at = stack.iter().rposition(|n| n.kind == "listItem");
+                if let Some(at) = item_at {
+                    stack[at].kind = "taskItem".into();
+                    stack[at].attrs = attrs(&[
+                        ("localId", json!("")),
+                        ("state", json!(if done { "DONE" } else { "TODO" })),
+                    ]);
+                    if let Some(list) = stack[..at].last_mut().filter(|n| n.kind == "bulletList") {
+                        list.kind = "taskList".into();
+                        list.attrs = attrs(&[("localId", json!(""))]);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -194,6 +247,22 @@ pub fn from_markdown(markdown: &str) -> Node {
         close(&mut stack);
     }
     stack.pop().expect("doc")
+}
+
+/// Inline content of paragraphs, joined with hard breaks, for nodes that hold text directly.
+fn flatten_paragraphs(content: Vec<Node>) -> Vec<Node> {
+    let mut out = Vec::new();
+    for node in content {
+        if node.kind == "paragraph" {
+            if !out.is_empty() {
+                out.push(Node::hard_break());
+            }
+            out.extend(node.content);
+        } else {
+            out.push(node);
+        }
+    }
+    out
 }
 
 /// Converts an ADF document to Markdown.
@@ -277,7 +346,21 @@ fn block_markdown(node: &Node, indent: &str, out: &mut String) {
                 }
             }
         }
-        // Panels, tables, and other nodes keep their text.
+        "taskList" => {
+            for item in &node.content {
+                let done = item
+                    .attrs
+                    .as_ref()
+                    .and_then(|a| a.get("state"))
+                    .and_then(Value::as_str)
+                    == Some("DONE");
+                let marker = if done { "- [x] " } else { "- [ ] " };
+                let text = inline(&item.content).replace('\n', " ");
+                out.push_str(&format!("{indent}{marker}{text}\n"));
+            }
+        }
+        "table" => table_markdown(node, indent, out),
+        // Panels and other nodes keep their text.
         _ => {
             if node
                 .content
@@ -291,6 +374,52 @@ fn block_markdown(node: &Node, indent: &str, out: &mut String) {
                 blocks(&node.content, indent, out);
             }
         }
+    }
+}
+
+/// A pipe table. The first row is the header row, as Markdown needs one.
+fn table_markdown(node: &Node, indent: &str, out: &mut String) {
+    let rows: Vec<Vec<String>> = node
+        .content
+        .iter()
+        .map(|row| {
+            row.content
+                .iter()
+                .map(|cell| {
+                    let parts: Vec<String> = cell
+                        .content
+                        .iter()
+                        .map(|block| inline(&block.content))
+                        .filter(|text| !text.is_empty())
+                        .collect();
+                    parts.join(" ").replace('\n', " ").replace('|', "\\|")
+                })
+                .collect()
+        })
+        .collect();
+    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if width == 0 {
+        return;
+    }
+    let line = |cells: &[String]| {
+        let mut padded: Vec<String> = cells.to_vec();
+        padded.resize(width, String::new());
+        let joined: Vec<String> = padded
+            .iter()
+            .map(|c| {
+                if c.is_empty() {
+                    " ".to_string()
+                } else {
+                    format!(" {c} ")
+                }
+            })
+            .collect();
+        format!("{indent}|{}|\n", joined.join("|"))
+    };
+    out.push_str(&line(&rows[0]));
+    out.push_str(&format!("{indent}|{}\n", " --- |".repeat(width)));
+    for row in &rows[1..] {
+        out.push_str(&line(row));
     }
 }
 
@@ -390,6 +519,29 @@ mod tests {
             item["content"][0]["content"][1]["marks"][0]["type"],
             "strong"
         );
+    }
+
+    #[test]
+    fn round_trips_tables_and_tasks() {
+        round_trip("| Topic | Who |\n| --- | --- |\n| Plans | Ana |\n| Risks | |");
+        round_trip("- [ ] Write the notes\n- [x] Book the room");
+    }
+
+    #[test]
+    fn tables_and_tasks_become_adf() {
+        let doc = from_markdown("| A | B |\n| --- | --- |\n| 1 | |\n\n- [x] done");
+        let json = serde_json::to_value(&doc).unwrap();
+        let table = &json["content"][0];
+        assert_eq!(table["type"], "table");
+        assert_eq!(table["content"][0]["content"][0]["type"], "tableHeader");
+        assert_eq!(table["content"][1]["content"][0]["type"], "tableCell");
+        let empty = &table["content"][1]["content"][1];
+        assert_eq!(empty["content"][0]["type"], "paragraph");
+        let tasks = &json["content"][1];
+        assert_eq!(tasks["type"], "taskList");
+        assert_eq!(tasks["content"][0]["type"], "taskItem");
+        assert_eq!(tasks["content"][0]["attrs"]["state"], "DONE");
+        assert_eq!(tasks["content"][0]["content"][0]["text"], "done");
     }
 
     #[test]

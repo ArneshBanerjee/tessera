@@ -464,3 +464,8 @@ textarea.input { resize: vertical; }
 .blog-card h2 { font-size: 18px; margin-bottom: 4px; }
 .blog-excerpt { max-height: 7.5em; overflow: hidden; position: relative; margin: 8px 0; }
 .blog-excerpt::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2.5em; background: linear-gradient(transparent, var(--surface)); }
+.template-picker { margin-bottom: 12px; max-width: 360px; }
+.template-picker label { display: flex; flex-direction: column; gap: 4px; }
+.template-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.template-list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.template-list li .link-button { margin-left: auto; }

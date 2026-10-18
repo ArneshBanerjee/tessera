@@ -90,6 +90,26 @@ restrictions = wiki.get_all_restrictions_for_content(page_id)
 check("restrictions", [u["accountId"] for u in restrictions["update"]["restrictions"]["user"]["results"]] == [me])
 check("no view restrictions", restrictions["read"]["restrictions"]["user"]["size"] == 0)
 
+blueprints = wiki.get_blueprint_templates()
+check("blueprints", "Meeting notes" in [t["name"] for t in blueprints])
+made = wiki.create_or_update_template(
+    "Compat template",
+    {"storage": {"value": "<p>From a template</p>", "representation": "storage"}},
+    description="Made by the client",
+    space="COMPAT",
+)
+check("template created", wiki.get_content_template(made["templateId"])["body"]["storage"]["value"] == "<p>From a template</p>")
+check("space templates", [t["name"] for t in wiki.get_content_templates("COMPAT")] == ["Compat template"])
+wiki.create_or_update_template(
+    "Compat template v2",
+    {"storage": {"value": "<p>Changed</p>", "representation": "storage"}},
+    template_id=made["templateId"],
+    space="COMPAT",
+)
+check("template updated", wiki.get_content_template(made["templateId"])["name"] == "Compat template v2")
+wiki.remove_template(made["templateId"])
+check("template removed", wiki.get_content_templates("COMPAT") == [])
+
 wiki.remove_page(child["id"])
 check("page trashed", not wiki.page_exists("COMPAT", "Install"))
 

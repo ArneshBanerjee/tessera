@@ -260,7 +260,7 @@ impl<'a> WikiCtx<'a> {
         }))
     }
 
-    async fn space_by_id(&mut self, id: i64, expand: &Expand) -> WikiResult<Value> {
+    pub async fn space_by_id(&mut self, id: i64, expand: &Expand) -> WikiResult<Value> {
         match self.load_space(id).await? {
             Some(space) => self.space(&space, expand).await,
             None => Ok(Value::Null),
