@@ -1,5 +1,6 @@
 //! The Confluence side of the app: spaces, the page tree, pages, and the editor.
 
+pub mod blog;
 pub mod editor;
 pub mod page;
 mod restrictions;
@@ -30,6 +31,33 @@ pub fn use_space() -> SpaceContext {
 /// The path of a page in the web app.
 pub fn page_path(space_key: &str, id: &str) -> String {
     format!("/wiki/spaces/{space_key}/pages/{id}")
+}
+
+/// The path of a page or blog post in the web app.
+pub fn content_path(space_key: &str, kind: &str, id: &str) -> String {
+    if kind == "blogpost" {
+        format!("/wiki/spaces/{space_key}/blog/{id}")
+    } else {
+        page_path(space_key, id)
+    }
+}
+
+/// Whether the current route shows a blog post, from its path.
+pub fn kind_of_path(path: &str) -> &'static str {
+    if path.contains("/blog/") {
+        "blogpost"
+    } else {
+        "page"
+    }
+}
+
+/// The v2 API collection of a content type.
+pub fn collection(kind: &str) -> &'static str {
+    if kind == "blogpost" {
+        "blogposts"
+    } else {
+        "pages"
+    }
 }
 
 /// Turns Markdown into the v2 API's ADF body.
@@ -220,6 +248,7 @@ pub fn SpaceLayout() -> impl IntoView {
                         </div>
                         <nav class="sidebar-nav">
                             <A href=home attr:class="sidebar-link">"Overview"</A>
+                            <A href=format!("/wiki/spaces/{}/blog", s.key) attr:class="sidebar-link">"Blog"</A>
                             <A href=format!("/wiki/spaces/{}/settings", s.key) attr:class="sidebar-link">"Space settings"</A>
                         </nav>
                         <div class="tree-header">

@@ -457,3 +457,10 @@ textarea.input { resize: vertical; }
 .row-actions { white-space: nowrap; text-align: right; }
 .security-level { font-weight: 500; }
 .row-actions .link-button + .link-button { margin-left: 12px; }
+
+/* Blog */
+.blog-list { display: flex; flex-direction: column; gap: 16px; max-width: 820px; }
+.blog-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; }
+.blog-card h2 { font-size: 18px; margin-bottom: 4px; }
+.blog-excerpt { max-height: 7.5em; overflow: hidden; position: relative; margin: 8px 0; }
+.blog-excerpt::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2.5em; background: linear-gradient(transparent, var(--surface)); }

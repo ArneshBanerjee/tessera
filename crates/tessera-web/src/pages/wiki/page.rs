@@ -7,7 +7,7 @@ use leptos_router::hooks::{use_navigate, use_params_map, use_query_map};
 use serde_json::{Value, json};
 
 use super::restrictions::RestrictionsButton;
-use super::{adf_body, page_path, use_space};
+use super::{adf_body, collection, content_path, kind_of_path, use_space};
 use crate::api;
 use crate::app::use_session;
 use crate::components::{Avatar, ErrorText};
@@ -58,8 +58,10 @@ fn PageBody(content: WikiContent, old: bool) -> impl IntoView {
     let space = use_space();
     let key = space.key.get_untracked();
     let id = content.id.clone();
-    let edit = format!("{}/edit", page_path(&key, &id));
-    let history = format!("{}/history", page_path(&key, &id));
+    let kind = content.content_type.clone();
+    let is_blog = kind == "blogpost";
+    let edit = format!("{}/edit", content_path(&key, &kind, &id));
+    let history = format!("{}/history", content_path(&key, &kind, &id));
     let child = format!("/wiki/spaces/{key}/create?parent={id}");
     let html = content.view_html();
     let created_by = content.history.created_by.clone();
@@ -68,20 +70,21 @@ fn PageBody(content: WikiContent, old: bool) -> impl IntoView {
     view! {
         <nav class="breadcrumbs">
             <A href=format!("/wiki/spaces/{key}")>{content.space.name.clone()}</A>
+            {is_blog.then(|| view! { " / " <A href=format!("/wiki/spaces/{key}/blog")>"Blog"</A> })}
             {content.ancestors.clone().into_iter().map(|a| view! {
-                " / " <A href=page_path(&key, &a.id)>{a.title}</A>
+                " / " <A href=content_path(&key, "page", &a.id)>{a.title}</A>
             }).collect_view()}
         </nav>
-        {old.then(|| view! { <OldVersionBanner id=id.clone() number=updated.number/> })}
+        {old.then(|| view! { <OldVersionBanner id=id.clone() kind=kind.clone() number=updated.number/> })}
         <header class="wiki-header">
             <h1 class="wiki-title">{content.title.clone()}</h1>
             <div class="issue-actions">
                 <A href=edit attr:class="button primary">"Edit"</A>
-                <A href=child attr:class="button">"Create child page"</A>
+                {(!is_blog).then(|| view! { <A href=child.clone() attr:class="button">"Create child page"</A> })}
                 <A href=history attr:class="button subtle">"History"</A>
                 <WatchPage id=id.clone()/>
                 <RestrictionsButton id=id.clone()/>
-                <DeletePage id=id.clone()/>
+                <DeletePage id=id.clone() kind=kind.clone()/>
             </div>
             <p class="byline muted small">
                 <Avatar user=Some(created_by.as_user()) size=20/>
@@ -98,13 +101,14 @@ fn PageBody(content: WikiContent, old: bool) -> impl IntoView {
 }
 
 #[component]
-fn OldVersionBanner(id: String, number: i64) -> impl IntoView {
+fn OldVersionBanner(id: String, kind: String, number: i64) -> impl IntoView {
     let session = use_session();
     let navigate = use_navigate();
     let space = use_space();
     let error = RwSignal::new(None::<String>);
     let restore = move |_| {
         let id = id.clone();
+        let kind = kind.clone();
         let navigate = navigate.clone();
         let key = space.key.get_untracked();
         spawn_local(async move {
@@ -112,7 +116,7 @@ fn OldVersionBanner(id: String, number: i64) -> impl IntoView {
             match api::post::<Value>(&format!("{}/content/{id}/version", api::WIKI), &body).await {
                 Ok(_) => {
                     session.changed();
-                    navigate(&page_path(&key, &id), Default::default());
+                    navigate(&content_path(&key, &kind, &id), Default::default());
                 }
                 Err(e) => error.set(Some(e.message)),
             }
@@ -157,21 +161,33 @@ fn WatchPage(id: String) -> impl IntoView {
 }
 
 #[component]
-fn DeletePage(id: String) -> impl IntoView {
+fn DeletePage(id: String, kind: String) -> impl IntoView {
     let session = use_session();
     let navigate = use_navigate();
     let space = use_space();
     let confirming = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let id = StoredValue::new(id);
+    let kind = StoredValue::new(kind);
     let delete = move |_| {
         let navigate = navigate.clone();
         let key = space.key.get_untracked();
         spawn_local(async move {
-            match api::delete(&format!("{}/pages/{}", api::WIKI2, id.get_value())).await {
+            let path = format!(
+                "{}/{}/{}",
+                api::WIKI2,
+                collection(&kind.get_value()),
+                id.get_value()
+            );
+            match api::delete(&path).await {
                 Ok(()) => {
                     session.changed();
-                    navigate(&format!("/wiki/spaces/{key}"), Default::default());
+                    let back = if kind.get_value() == "blogpost" {
+                        format!("/wiki/spaces/{key}/blog")
+                    } else {
+                        format!("/wiki/spaces/{key}")
+                    };
+                    navigate(&back, Default::default());
                 }
                 Err(e) => error.set(Some(e.message)),
             }
@@ -181,7 +197,7 @@ fn DeletePage(id: String) -> impl IntoView {
         <Show when=move || confirming.get()
             fallback=move || view! { <button class="button subtle" on:click=move |_| confirming.set(true)>"Delete"</button> }>
             <span class="confirm">
-                "Move this page to the trash?"
+                {move || if kind.get_value() == "blogpost" { "Move this blog post to the trash?" } else { "Move this page to the trash?" }}
                 <button class="button danger small" on:click=delete.clone()>"Delete"</button>
                 <button class="button subtle small" on:click=move |_| confirming.set(false)>"Cancel"</button>
             </span>
@@ -503,6 +519,11 @@ fn CommentBox(page: String, reply_to: Option<String>) -> impl IntoView {
 pub fn PageHistory() -> impl IntoView {
     let params = use_params_map();
     let space = use_space();
+    let kind = kind_of_path(
+        &leptos_router::hooks::use_location()
+            .pathname
+            .get_untracked(),
+    );
     let id = Signal::derive(move || params.with(|p| p.get("id")).unwrap_or_default());
     let versions = LocalResource::new(move || {
         let id = id.get();
@@ -515,8 +536,8 @@ pub fn PageHistory() -> impl IntoView {
     view! {
         <div class="page wiki-page">
             <header class="page-header">
-                <h1>"Page history"</h1>
-                <A href=move || page_path(&space.key.get(), &id.get()) attr:class="button">"Back to page"</A>
+                <h1>{if kind == "blogpost" { "Blog post history" } else { "Page history" }}</h1>
+                <A href=move || content_path(&space.key.get(), kind, &id.get()) attr:class="button">"Back"</A>
             </header>
             <Transition fallback=|| view! { <p class="muted">"Loading history…"</p> }>
                 {move || versions.get().map(|result| match result {
@@ -525,7 +546,7 @@ pub fn PageHistory() -> impl IntoView {
                             <thead><tr><th>"Version"</th><th>"Date"</th><th>"By"</th><th>"Comment"</th></tr></thead>
                             <tbody>
                                 {list.into_iter().map(|v| {
-                                    let href = format!("{}?version={}", page_path(&space.key.get_untracked(), &id.get_untracked()), v.number);
+                                    let href = format!("{}?version={}", content_path(&space.key.get_untracked(), kind, &id.get_untracked()), v.number);
                                     view! {
                                         <tr>
                                             <td><A href=href>{format!("v. {}", v.number)}</A></td>

@@ -138,6 +138,11 @@ fn Shell(me: User) -> impl IntoView {
                     <Route path=path!("pages/:id") view=wiki::page::PageView/>
                     <Route path=path!("pages/:id/edit") view=wiki::editor::EditPage/>
                     <Route path=path!("pages/:id/history") view=wiki::page::PageHistory/>
+                    <Route path=path!("blog") view=wiki::blog::BlogList/>
+                    <Route path=path!("blog/create") view=wiki::editor::CreateBlogPost/>
+                    <Route path=path!("blog/:id") view=wiki::page::PageView/>
+                    <Route path=path!("blog/:id/edit") view=wiki::editor::EditPage/>
+                    <Route path=path!("blog/:id/history") view=wiki::page::PageHistory/>
                 </ParentRoute>
             </Routes>
         </div>

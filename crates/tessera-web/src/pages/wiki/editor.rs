@@ -1,12 +1,12 @@
-//! The page editor, for new pages and edits. Pages are written in Markdown and saved as ADF;
-//! the server keeps them in Confluence's storage format.
+//! The editor, for new pages, blog posts, and edits. Content is written in Markdown and saved
+//! as ADF; the server keeps it in Confluence's storage format.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos_router::hooks::{use_navigate, use_params_map, use_query_map};
+use leptos_router::hooks::{use_location, use_navigate, use_params_map, use_query_map};
 use serde_json::{Value, json};
 
-use super::{adf_body, page_path, use_space};
+use super::{adf_body, collection, content_path, kind_of_path, use_space};
 use crate::api;
 use crate::app::use_session;
 use crate::components::{ErrorText, autofocus};
@@ -16,15 +16,22 @@ use crate::components::{ErrorText, autofocus};
 pub fn CreatePage() -> impl IntoView {
     let query = use_query_map();
     let parent = query.with_untracked(|q| q.get("parent"));
-    view! { <Editor id=None parent=parent/> }
+    view! { <Editor id=None parent=parent kind="page"/> }
 }
 
-/// `/wiki/spaces/:key/pages/:id/edit`.
+/// `/wiki/spaces/:key/blog/create`.
+#[component]
+pub fn CreateBlogPost() -> impl IntoView {
+    view! { <Editor id=None parent=None kind="blogpost"/> }
+}
+
+/// `/wiki/spaces/:key/pages/:id/edit` and `/wiki/spaces/:key/blog/:id/edit`.
 #[component]
 pub fn EditPage() -> impl IntoView {
     let params = use_params_map();
     let id = params.with_untracked(|p| p.get("id"));
-    view! { <Editor id=id parent=None/> }
+    let kind = kind_of_path(&use_location().pathname.get_untracked());
+    view! { <Editor id=id parent=None kind=kind/> }
 }
 
 /// The page as the editor loads it: title, Markdown, and the version it was read at.
@@ -35,10 +42,11 @@ struct Draft {
     version: i64,
 }
 
-async fn load(id: &str) -> api::ApiResult<Draft> {
+async fn load(id: &str, kind: &str) -> api::ApiResult<Draft> {
     let page: Value = api::get(&format!(
-        "{}/pages/{id}?body-format=atlas_doc_format",
-        api::WIKI2
+        "{}/{}/{id}?body-format=atlas_doc_format",
+        api::WIKI2,
+        collection(kind)
     ))
     .await?;
     let adf = page["body"]["atlas_doc_format"]["value"]
@@ -55,7 +63,7 @@ async fn load(id: &str) -> api::ApiResult<Draft> {
 }
 
 #[component]
-fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
+fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> impl IntoView {
     let session = use_session();
     let space = use_space();
     let navigate = use_navigate();
@@ -69,7 +77,7 @@ fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
     // An edit starts from the saved page.
     if let Some(id) = id.clone() {
         spawn_local(async move {
-            match load(&id).await {
+            match load(&id, kind).await {
                 Ok(draft) => {
                     title.set(draft.title);
                     markdown.set(draft.markdown);
@@ -85,7 +93,8 @@ fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
         move |_| {
             let key = space.key.get_untracked();
             let target = match editing.get_value() {
-                Some(id) => page_path(&key, &id),
+                Some(id) => content_path(&key, kind, &id),
+                None if kind == "blogpost" => format!("/wiki/spaces/{key}/blog"),
                 None => format!("/wiki/spaces/{key}"),
             };
             navigate(&target, Default::default());
@@ -111,7 +120,7 @@ fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
                     });
                     api::request(
                         gloo_net::http::Method::PUT,
-                        &format!("{}/pages/{id}", api::WIKI2),
+                        &format!("{}/{}/{id}", api::WIKI2, collection(kind)),
                         Some(&update),
                     )
                     .await
@@ -126,7 +135,8 @@ fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
                     if let Some(parent) = parent {
                         create["parentId"] = json!(parent);
                     }
-                    api::post::<Value>(&format!("{}/pages", api::WIKI2), &create).await
+                    api::post::<Value>(&format!("{}/{}", api::WIKI2, collection(kind)), &create)
+                        .await
                 }
             };
             saving.set(false);
@@ -134,7 +144,7 @@ fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
                 Ok(page) => {
                     session.changed();
                     let id = page["id"].as_str().unwrap_or_default().to_string();
-                    navigate(&page_path(&found.key, &id), Default::default());
+                    navigate(&content_path(&found.key, kind, &id), Default::default());
                 }
                 Err(e) if e.status == 409 => error.set(Some(format!(
                     "Someone else saved this page while you were editing. Copy your text, reload, and try again. ({})",
@@ -146,7 +156,8 @@ fn Editor(id: Option<String>, parent: Option<String>) -> impl IntoView {
     };
     view! {
         <div class="page wiki-page editor-page">
-            <input class="input title-input" placeholder="Give this page a title" node_ref=autofocus()
+            <input class="input title-input" node_ref=autofocus()
+                placeholder=if kind == "blogpost" { "Give this blog post a title" } else { "Give this page a title" }
                 prop:value=move || title.get()
                 on:input:target=move |ev| title.set(ev.target().value())/>
             <textarea class="input editor wiki-editor" rows="24"
