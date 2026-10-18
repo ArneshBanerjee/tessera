@@ -1,8 +1,8 @@
 //! Schemes and project categories.
 //!
-//! Tessera has one notification setup and no issue security levels yet. Each is exposed as the
-//! single default scheme Jira clients look for when they create projects. Permission schemes
-//! live in `permissions`.
+//! Tessera has one notification setup, exposed as the single default scheme Jira clients look
+//! for when they create projects. Permission schemes live in `permissions`, and issue security
+//! schemes in `security`.
 
 use super::extract::Json;
 use axum::Extension;
@@ -19,23 +19,6 @@ use crate::error::{ApiError, ApiResult};
 use crate::store::projects::{self, Category};
 
 pub const DEFAULT_NOTIFICATION_SCHEME: i64 = 10000;
-pub const DEFAULT_SECURITY_SCHEME: i64 = 10000;
-
-pub async fn issue_security_schemes(
-    State(state): State<AppState>,
-    Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
-) -> ApiResult<Json<Value>> {
-    let ctx = Ctx::new(&state, version).await?;
-    Ok(Json(json!({
-        "issueSecuritySchemes": [{
-            "self": ctx.api_url(&format!("/issuesecurityschemes/{DEFAULT_SECURITY_SCHEME}")),
-            "id": DEFAULT_SECURITY_SCHEME,
-            "name": "Default",
-            "description": "No security levels: everyone who can see a project sees all of its issues.",
-        }]
-    })))
-}
 
 pub async fn notification_schemes(
     State(state): State<AppState>,

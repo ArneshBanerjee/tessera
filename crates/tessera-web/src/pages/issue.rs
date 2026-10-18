@@ -723,6 +723,25 @@ fn Details(issue: Issue, error: RwSignal<Option<String>>) -> impl IntoView {
             )
         })
     };
+    // The levels this user may pick, from the edit metadata; none when they may not set one.
+    let levels = LocalResource::new({
+        let key = key.clone();
+        move || {
+            let key = key.clone();
+            async move {
+                api::get::<Value>(&format!("{}/issue/{key}/editmeta", api::CORE))
+                    .await
+                    .ok()
+                    .and_then(|meta| {
+                        meta["fields"]["security"]["allowedValues"]
+                            .as_array()
+                            .cloned()
+                    })
+            }
+        }
+    });
+    let current_level = fields.security.clone();
+    let set_level = set.clone();
     let current_priority = fields.priority.as_ref().map(|p| p.id.clone());
     let labels = RwSignal::new(fields.labels.join(" "));
     let due = fields.duedate.clone().unwrap_or_default();
@@ -781,6 +800,36 @@ fn Details(issue: Issue, error: RwSignal<Option<String>>) -> impl IntoView {
                         }).collect_view()}
                     </select>
                 </dd>
+                {move || {
+                    let current = current_level.clone();
+                    let set_level = set_level.clone();
+                    match (levels.get().flatten(), current) {
+                        (Some(allowed), current) => Some(view! {
+                            <dt>"Security level"</dt>
+                            <dd>
+                                <select class="select" aria-label="Security level"
+                                    on:change:target=move |ev| {
+                                        let id = ev.target().value();
+                                        set_level("security", if id.is_empty() { Value::Null } else { json!({ "id": id }) });
+                                    }>
+                                    <option value="" selected=current.is_none()>"None"</option>
+                                    {allowed.into_iter().map(|level| {
+                                        let id = level["id"].as_str().unwrap_or_default().to_string();
+                                        let selected = current.as_ref().is_some_and(|c| c.id == id);
+                                        view! { <option value=id selected=selected>{level["name"].as_str().unwrap_or_default().to_string()}</option> }
+                                    }).collect_view()}
+                                </select>
+                            </dd>
+                        }.into_any()),
+                        (None, Some(level)) => Some(view! {
+                            <dt>"Security level"</dt>
+                            <dd class="security-level" title="Only members of this level can see the issue">
+                                "🔒 "{level.name}
+                            </dd>
+                        }.into_any()),
+                        (None, None) => None,
+                    }
+                }}
                 <dt>"Labels"</dt>
                 <dd>
                     <input class="input" placeholder="Separate with spaces"

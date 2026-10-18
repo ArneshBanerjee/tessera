@@ -594,7 +594,10 @@ async fn schemes_and_project_categories() {
         "Default Permission Scheme"
     );
     let (_, security) = app.get("/rest/api/2/issuesecurityschemes").await;
-    assert_eq!(security["issueSecuritySchemes"][0]["name"], "Default");
+    assert_eq!(
+        security["issueSecuritySchemes"][0]["name"],
+        "Default issue security scheme"
+    );
 
     let (status, category) = app
         .post(

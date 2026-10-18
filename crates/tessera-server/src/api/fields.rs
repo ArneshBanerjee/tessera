@@ -97,6 +97,14 @@ pub const SYSTEM_FIELDS: &[SystemField] = &[
     field("assignee", "Assignee", "user", &["assignee"], true),
     field("reporter", "Reporter", "user", &["reporter"], true),
     field("creator", "Creator", "user", &["creator"], false),
+    // Set through its own metadata entry, which depends on the project's security scheme.
+    field(
+        "security",
+        "Security Level",
+        "securitylevel",
+        &["level"],
+        false,
+    ),
     field("parent", "Parent", "issuelink", &["parent"], true),
     field("duedate", "Due date", "date", &["due", "duedate"], true),
     field(

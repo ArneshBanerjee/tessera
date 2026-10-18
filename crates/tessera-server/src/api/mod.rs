@@ -22,6 +22,7 @@ mod projects;
 pub mod render;
 mod schemes;
 mod search;
+pub mod security;
 mod server_info;
 mod session;
 mod sharing;
@@ -237,7 +238,48 @@ fn jira_routes() -> Router<AppState> {
         )
         .route(
             "/issuesecurityschemes",
-            get(schemes::issue_security_schemes),
+            get(security::list).post(security::create),
+        )
+        .route("/issuesecurityschemes/level", get(security::levels))
+        .route(
+            "/issuesecurityschemes/level/default",
+            put(security::set_defaults),
+        )
+        .route("/issuesecurityschemes/level/member", get(security::members))
+        .route(
+            "/issuesecurityschemes/project",
+            get(security::project_associations).put(security::associate),
+        )
+        .route(
+            "/issuesecurityschemes/{id}",
+            get(security::get)
+                .put(security::update)
+                .delete(security::delete),
+        )
+        .route(
+            "/issuesecurityschemes/{id}/level",
+            put(security::add_levels_to_scheme),
+        )
+        .route(
+            "/issuesecurityschemes/{id}/level/{level}",
+            put(security::update_level).delete(security::delete_level),
+        )
+        .route(
+            "/issuesecurityschemes/{id}/level/{level}/member",
+            put(security::add_members),
+        )
+        .route(
+            "/issuesecurityschemes/{id}/level/{level}/member/{member}",
+            axum::routing::delete(security::delete_member),
+        )
+        .route("/securitylevel/{id}", get(security::level))
+        .route(
+            "/project/{key}/issuesecuritylevelscheme",
+            get(security::project_scheme),
+        )
+        .route(
+            "/project/{key}/securitylevel",
+            get(security::project_levels),
         )
         .route("/notificationscheme", get(schemes::notification_schemes))
         .route(

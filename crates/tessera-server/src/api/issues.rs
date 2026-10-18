@@ -1,7 +1,7 @@
 //! Issues: create, read, edit, delete, assign, history, and the create and edit metadata.
 
 use crate::api::access::Access;
-use crate::api::access::find_issue_as;
+use crate::api::access::{find_issue_access, find_issue_as, viewer_can_see};
 use crate::notify::{self, IssueEvent};
 use std::collections::BTreeMap;
 
@@ -11,10 +11,12 @@ use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use sqlx::SqlitePool;
 
 use super::fields::{SYSTEM_FIELDS, custom_field_json, custom_field_key, system_field_json};
 use super::issue_fields::{self, CustomCatalog, Mode, render_custom_value};
 use super::render::Ctx;
+use super::security::security_level_json;
 use super::{ApiVersion, Page};
 use crate::AppState;
 use crate::auth::CurrentUser;
@@ -22,7 +24,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::store::changelog::{self, Changelog};
 use crate::store::issues::{self, Issue, IssueFields};
 use crate::store::social::{self, List};
-use crate::store::{comments, projects, workflows};
+use crate::store::{comments, projects, security, users, workflows};
 use crate::time::{format, now_ms};
 
 /// Which fields and expansions to include when rendering an issue.
@@ -241,6 +243,16 @@ pub async fn issue_json(
         "resolutiondate",
         json!(issue.resolution_date.map(format)),
     );
+    let level = match issue.security_level_id {
+        Some(id) => security::level(&db, id).await?,
+        None => None,
+    };
+    put(
+        f,
+        view,
+        "security",
+        level.map_or(Value::Null, |l| security_level_json(ctx, &l, None)),
+    );
     put(f, view, "duedate", json!(issue.due_date));
     put(f, view, "created", json!(format(issue.created_at)));
     put(f, view, "updated", json!(format(issue.updated_at)));
@@ -263,11 +275,17 @@ pub async fn issue_json(
     if view.wants("parent")
         && let Some(parent_id) = issue.parent_id
         && let Some(parent) = issues::by_id(&db, parent_id).await?
+        && viewer_can_see(&db, ctx.viewer, &parent).await?
     {
         fields.insert("parent".into(), issue_ref(ctx, &parent));
     }
     if view.wants("subtasks") {
-        let subtasks = issues::subtasks(&db, issue.id).await?;
+        let mut subtasks = Vec::new();
+        for subtask in issues::subtasks(&db, issue.id).await? {
+            if viewer_can_see(&db, ctx.viewer, &subtask).await? {
+                subtasks.push(subtask);
+            }
+        }
         let subtask_type = |i: &Issue| {
             catalog
                 .issue_type(i.issue_type_id)
@@ -600,6 +618,21 @@ pub async fn create(
         Mode::Create,
     )
     .await?;
+    // Subtasks share their parent's level. Otherwise a level picked in the request needs the
+    // permission to set it, and without one the scheme's default level applies.
+    let parent = match fields.parent_id {
+        Some(id) => issues::by_id(&state.db, id).await?,
+        None => None,
+    };
+    if let Some(parent) = &parent {
+        fields.security_level_id = parent.security_level_id;
+    } else if request.fields.contains_key("security") {
+        check_security(&state.db, &access, None, fields.security_level_id).await?;
+    } else if let Some(scheme) = security::project_scheme(&state.db, project.id).await? {
+        fields.security_level_id = security::scheme(&state.db, scheme)
+            .await?
+            .and_then(|s| s.default_level_id);
+    }
     // New issues start in the initial status of their type's workflow.
     let workflow = workflows::for_issue_type(&state.db, project.id, fields.issue_type_id).await?;
     fields.status_id = workflows::initial_status(&state.db, workflow).await?;
@@ -624,6 +657,35 @@ pub async fn create(
             "self": ctx.api_url(&format!("/issue/{}", issue.id)),
         })),
     ))
+}
+
+/// Checks that a user may put an issue at a security level: they hold Set Issue Security and
+/// are a member of the level.
+async fn check_security(
+    db: &SqlitePool,
+    access: &Access,
+    issue: Option<&Issue>,
+    level: Option<i64>,
+) -> ApiResult<()> {
+    if !access.can_on("SET_ISSUE_SECURITY", issue) {
+        return Err(ApiError::field(
+            "security",
+            "Field 'security' cannot be set. It is not on the appropriate screen, or unknown.",
+        ));
+    }
+    if let Some(level) = level
+        && !access.in_level(level, issue)
+    {
+        let name = security::level(db, level)
+            .await?
+            .map(|l| l.name)
+            .unwrap_or_default();
+        return Err(ApiError::field(
+            "security",
+            format!("You are not a member of the security level '{name}'."),
+        ));
+    }
+    Ok(())
 }
 
 /// Applies an edit to an issue and records the changes in its history. Returns the names of
@@ -657,6 +719,19 @@ pub async fn save_edit(
     )
     .await?;
     sync_resolution_date(before.resolution_id, &mut after);
+    if after.security_level_id != before.security_level_id {
+        if issue.parent_id.is_some() {
+            return Err(ApiError::field(
+                "security",
+                "A subtask has the security level of its parent.",
+            ));
+        }
+        let author = users::by_id(&db, author_id)
+            .await?
+            .ok_or_else(ApiError::issue_not_found)?;
+        let access = Access::load(&db, &author, &project).await?;
+        check_security(&db, &access, Some(issue), after.security_level_id).await?;
+    }
     // A new issue type may follow another workflow, which must have the issue's status.
     if after.issue_type_id != before.issue_type_id {
         let workflow = workflows::for_issue_type(&db, project.id, after.issue_type_id).await?;
@@ -672,6 +747,9 @@ pub async fn save_edit(
     }
     let changes = issue_fields::diff(ctx, &custom, &before, &before_custom, &after).await?;
     issues::update(&db, issue.id, author_id, &after, &changes).await?;
+    if after.security_level_id != before.security_level_id {
+        issues::set_subtask_security(&db, issue.id, after.security_level_id).await?;
+    }
     for body in &new_comments {
         comments::create(&db, issue.id, author_id, body).await?;
         social::add(&db, List::Watchers, issue.id, author_id).await?;
@@ -896,6 +974,37 @@ fn field_meta(ctx: &Ctx, custom: &CustomCatalog, for_create: bool) -> BTreeMap<S
     meta
 }
 
+/// Adds the `security` field to metadata when the project has security levels and the user
+/// may set them. Its allowed values are the levels the user is a member of.
+fn add_security_meta(
+    ctx: &Ctx,
+    meta: &mut BTreeMap<String, Value>,
+    access: &Access,
+    issue: Option<&Issue>,
+) {
+    if access.levels().is_empty() || !access.can_on("SET_ISSUE_SECURITY", issue) {
+        return;
+    }
+    let allowed: Vec<Value> = access
+        .settable_levels(issue)
+        .iter()
+        .map(|l| security_level_json(ctx, l, None))
+        .collect();
+    meta.insert(
+        "security".into(),
+        json!({
+            "key": "security",
+            "fieldId": "security",
+            "name": "Security Level",
+            "schema": { "type": "securitylevel", "system": "security" },
+            "required": false,
+            "hasDefaultValue": false,
+            "operations": ["set"],
+            "allowedValues": allowed,
+        }),
+    );
+}
+
 /// The legacy `GET /issue/createmeta`, which many clients still use.
 pub async fn create_meta(
     State(state): State<AppState>,
@@ -921,13 +1030,15 @@ pub async fn create_meta(
             || keys.iter().any(|k| k.eq_ignore_ascii_case(&project.key))
             || ids.contains(&project.id.to_string());
         // Only projects the user may create issues in, as in Jira.
-        if !selected
-            || !Access::load(&state.db, &user, &project)
-                .await?
-                .can("CREATE_ISSUES")
-        {
+        if !selected {
             continue;
         }
+        let access = Access::load(&state.db, &user, &project).await?;
+        if !access.can("CREATE_ISSUES") {
+            continue;
+        }
+        let mut fields = fields.clone();
+        add_security_meta(&ctx, &mut fields, &access, None);
         let issue_types: Vec<Value> = ctx
             .catalog
             .issue_types
@@ -983,12 +1094,13 @@ pub async fn create_meta_issue_types(
 pub async fn create_meta_fields(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path((project, issue_type)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    projects::by_id_or_key(&state.db, &project)
+    let project = projects::by_id_or_key(&state.db, &project)
         .await?
         .ok_or_else(|| ApiError::project_not_found(&project))?;
+    let access = Access::load(&state.db, &user, &project).await?;
     let ctx = Ctx::new(&state, version).await?;
     issue_type
         .parse()
@@ -996,7 +1108,9 @@ pub async fn create_meta_fields(
         .and_then(|id| ctx.catalog.issue_type(id))
         .ok_or_else(|| ApiError::not_found("The issue type was not found."))?;
     let custom = CustomCatalog::load(&state.db).await?;
-    let fields: Vec<Value> = field_meta(&ctx, &custom, true).into_values().collect();
+    let mut meta = field_meta(&ctx, &custom, true);
+    add_security_meta(&ctx, &mut meta, &access, None);
+    let fields: Vec<Value> = meta.into_values().collect();
     let total = fields.len();
     Ok(Json(json!({
         "maxResults": 50,
@@ -1013,8 +1127,13 @@ pub async fn edit_meta(
     CurrentUser(user): CurrentUser,
     Path(id_or_key): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    find_issue_as(&state, &user, &id_or_key, "BROWSE_PROJECTS").await?;
+    let (issue, access) = find_issue_access(&state, &user, &id_or_key).await?;
     let ctx = Ctx::new(&state, version).await?;
     let custom = CustomCatalog::load(&state.db).await?;
-    Ok(Json(json!({ "fields": field_meta(&ctx, &custom, false) })))
+    let mut meta = field_meta(&ctx, &custom, false);
+    // Subtasks take their parent's level, so theirs cannot be set.
+    if issue.parent_id.is_none() {
+        add_security_meta(&ctx, &mut meta, &access, Some(&issue));
+    }
+    Ok(Json(json!({ "fields": meta })))
 }

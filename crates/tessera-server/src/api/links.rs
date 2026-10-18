@@ -6,7 +6,7 @@
 //! ("blocks PROJ-2"), and PROJ-2 shows `inwardIssue: PROJ-1` ("is blocked by PROJ-1").
 
 use super::extract::Json;
-use crate::api::access::require_issue;
+use crate::api::access::{require_issue, viewer_can_see};
 use crate::store::users::User;
 use axum::Extension;
 use axum::extract::{Path, State};
@@ -57,6 +57,10 @@ pub async fn issue_links_json(ctx: &Ctx, issue: &Issue) -> ApiResult<Value> {
         let Some(other) = issues::by_id(db, other_id).await? else {
             continue;
         };
+        // Links to issues the viewer cannot see are left out, as in Jira.
+        if !viewer_can_see(db, ctx.viewer, &other).await? {
+            continue;
+        }
         rendered.push(json!({
             "id": link.id.to_string(),
             "self": ctx.api_url(&format!("/issueLink/{}", link.id)),

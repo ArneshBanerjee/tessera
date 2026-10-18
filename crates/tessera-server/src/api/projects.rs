@@ -17,7 +17,7 @@ use crate::auth::{AdminUser, CurrentUser};
 use crate::error::{ApiError, ApiResult};
 use crate::store::filters::{self, Share};
 use crate::store::projects::{self, NewProject, Project, ProjectUpdate};
-use crate::store::{users, workflows};
+use crate::store::{security, users, workflows};
 
 /// The full project object, as returned by `GET /project/{idOrKey}`.
 async fn full_project(ctx: &mut Ctx, project: &Project) -> ApiResult<Value> {
@@ -147,8 +147,10 @@ pub struct NewProjectRequest {
     assignee_type: Option<String>,
     /// Software templates (scrum, kanban, basic) also create a board, as in Jira.
     project_template_key: Option<String>,
-    // `permissionScheme`, `notificationScheme`, and `issueSecurityScheme` are accepted and
-    // ignored: Tessera has one default of each.
+    /// The issue security scheme, by id (a number or a string).
+    issue_security_scheme: Option<Value>,
+    // `permissionScheme` and `notificationScheme` are accepted and ignored: new projects use
+    // the default permission scheme, and Tessera has one notification setup.
 }
 
 fn check_assignee_type(value: Option<&str>) -> ApiResult<()> {
@@ -233,6 +235,24 @@ pub async fn create(
     }
     check_assignee_type(request.assignee_type.as_deref())?;
     check_category(&state, request.category_id).await?;
+    let security_scheme = match &request.issue_security_scheme {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let id = value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|s| s.parse().ok()));
+            let found = match id {
+                Some(id) => security::scheme(&state.db, id).await?,
+                None => None,
+            };
+            Some(found.ok_or_else(|| {
+                ApiError::field(
+                    "issueSecurityScheme",
+                    "The issue security scheme does not exist.",
+                )
+            })?)
+        }
+    };
     let lead_id = lead_id(
         &state,
         request.lead_account_id.as_deref(),
@@ -263,6 +283,9 @@ pub async fn create(
         administrator,
     )
     .await?;
+    if let Some(scheme) = security_scheme {
+        security::set_project_scheme(&state.db, project.id, Some(scheme.id), &[]).await?;
+    }
     if let Some(board_type) = template_board_type(&project, request.project_template_key.as_deref())
     {
         create_project_board(&state, admin.id, &project, board_type).await?;

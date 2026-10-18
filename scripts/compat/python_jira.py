@@ -144,6 +144,21 @@ jira.add_user_to_group(me["accountId"], "compat-devs")
 check("groups", "compat-devs" in jira.groups())
 check("group members", list(jira.group_members("compat-devs")) != [])
 
+# create_project picked the first issue security scheme, as the client does.
+scheme = jira.project_issue_security_level_scheme("COMPAT")
+check("project security scheme", scheme.name == jira.issuesecurityschemes()[0]["name"])
+jira._session.put(
+    jira._get_url("issuesecurityschemes/{}/level".format(scheme.id)),
+    json={"levels": [{"name": "Compat staff", "members": [{"type": "reporter"}]}]},
+)
+level = jira.project_issue_security_level_scheme("COMPAT").levels[0]
+check("security level", jira.security_level(level.id).name == "Compat staff")
+secured = jira.create_issue(project="COMPAT", summary="Secured", issuetype={"name": "Task"},
+                            security={"id": level.id})
+check("issue security", jira.issue(secured.key).fields.security.name == "Compat staff")
+check("level in JQL", [i.key for i in jira.search_issues('level = "Compat staff"')] == [secured.key])
+secured.delete()
+
 check("system dashboard", [d.id for d in jira.dashboards()] == ["10000"])
 board = jira.create_dashboard("Compat dashboard", description="From the client")
 check("dashboard created", jira.dashboard(board.id).name == "Compat dashboard")

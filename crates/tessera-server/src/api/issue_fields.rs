@@ -13,7 +13,7 @@ use crate::store::fields::CustomField;
 use crate::store::issues::{self, ChangeItem, IssueFields};
 use crate::store::meta::{find_by_ref, json_id};
 use crate::store::projects::Project;
-use crate::store::{components, users, versions};
+use crate::store::{components, security, users, versions};
 use crate::time;
 
 /// Whether the request creates a new issue or edits an existing one.
@@ -165,6 +165,26 @@ async fn set_field(
                         })?
                         .id,
                 ),
+            };
+        }
+        "security" => {
+            target.security_level_id = match value {
+                Value::Null => None,
+                _ => {
+                    // Only the levels of the project's own scheme can be picked.
+                    let db = &ctx.state.db;
+                    let scheme = security::project_scheme(db, project.id)
+                        .await?
+                        .ok_or_else(|| cannot_set("security"))?;
+                    let levels = security::levels(db, scheme).await?;
+                    Some(
+                        find_by_ref(&levels, value, |l| l.id, |l| &l.name)
+                            .ok_or_else(|| {
+                                ApiError::field("security", "Security level is not valid.")
+                            })?
+                            .id,
+                    )
+                }
             };
         }
         "assignee" => target.assignee_id = user_ref(&ctx.state.db, "assignee", value).await?,
@@ -786,6 +806,19 @@ pub async fn diff(
             named(before.priority_id, name(before.priority_id)),
             named(after.priority_id, name(after.priority_id)),
         );
+    }
+    if before.security_level_id != after.security_level_id {
+        let db = ctx.state.db.clone();
+        let named_level = async |id: Option<i64>| -> ApiResult<(Option<String>, Option<String>)> {
+            let name = match id {
+                Some(id) => security::level(&db, id).await?.map(|l| l.name),
+                None => None,
+            };
+            Ok((id.map(|id| id.to_string()), name))
+        };
+        let from = named_level(before.security_level_id).await?;
+        let to = named_level(after.security_level_id).await?;
+        push("security", from, to);
     }
     if before.resolution_id != after.resolution_id {
         let name = |id: Option<i64>| {

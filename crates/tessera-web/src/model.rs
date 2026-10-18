@@ -143,6 +143,8 @@ pub struct Fields {
     pub status: Option<Status>,
     pub priority: Option<Named>,
     pub resolution: Option<Named>,
+    /// The issue's security level, when only its members may see it.
+    pub security: Option<Named>,
     pub assignee: Option<User>,
     pub reporter: Option<User>,
     pub project: Option<Project>,

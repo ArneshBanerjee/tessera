@@ -20,6 +20,7 @@ use crate::store::filters::Filter;
 use crate::store::links::LinkType;
 use crate::store::meta::Catalog;
 use crate::store::projects::Project;
+use crate::store::security::Level;
 use crate::store::sprints::Sprint;
 use crate::store::users::User;
 use crate::store::versions::Version;
@@ -37,6 +38,9 @@ pub struct SearchContext<'a> {
     pub sprints: &'a [Sprint],
     /// Saved filters the searching user may see, for `filter = ...` clauses.
     pub filters: &'a [Filter],
+    /// Every security level, for `level = ...` clauses. Search hides issues at levels the user
+    /// is not a member of, whatever the query.
+    pub security_levels: &'a [Level],
     pub current_user: Option<i64>,
     pub now: i64,
 }
@@ -90,6 +94,7 @@ enum Kind<'a> {
     StatusCategory,
     Priority,
     Resolution,
+    SecurityLevel,
     /// A user column. `history` is the field id in the changelog, when history is kept.
     User {
         column: &'static str,
@@ -230,6 +235,7 @@ impl<'a> Compiler<'a> {
                     "statuscategory" => Kind::StatusCategory,
                     "priority" => Kind::Priority,
                     "resolution" => Kind::Resolution,
+                    "level" => Kind::SecurityLevel,
                     "assignee" => Kind::User {
                         column: "assignee_id",
                         history: Some("assignee"),
@@ -324,7 +330,8 @@ impl<'a> Compiler<'a> {
             | Kind::IssueType
             | Kind::Status
             | Kind::StatusCategory
-            | Kind::Resolution => {
+            | Kind::Resolution
+            | Kind::SecurityLevel => {
                 let (ids, empty) = self.ids(kind, &name, &atoms)?;
                 id_condition(&mut self.binds, column(kind), op, &ids, empty, &name)
             }
@@ -564,6 +571,14 @@ impl<'a> Compiler<'a> {
                     .iter()
                     .filter(|p| is(p.id, &p.name))
                     .map(|p| p.id)
+                    .collect(),
+                // Several schemes may have a level of the same name; all of them match.
+                Kind::SecurityLevel => self
+                    .ctx
+                    .security_levels
+                    .iter()
+                    .filter(|l| is(l.id, &l.name))
+                    .map(|l| l.id)
                     .collect(),
                 Kind::Resolution if text.eq_ignore_ascii_case("Unresolved") => {
                     empty = true;
@@ -1684,6 +1699,10 @@ impl<'a> Compiler<'a> {
                     "(SELECT -sequence FROM priorities WHERE id = i.priority_id)".into()
                 }
                 Kind::Resolution => "i.resolution_id".into(),
+                Kind::SecurityLevel => {
+                    "(SELECT name FROM security_levels WHERE id = i.security_level_id) COLLATE NOCASE"
+                        .into()
+                }
                 Kind::User { column, .. } => {
                     format!("(SELECT display_name FROM users WHERE id = i.{column}) COLLATE NOCASE")
                 }
@@ -1730,6 +1749,7 @@ fn column(kind: Kind) -> String {
         Kind::Status | Kind::StatusCategory => "i.status_id".into(),
         Kind::Priority => "i.priority_id".into(),
         Kind::Resolution => "i.resolution_id".into(),
+        Kind::SecurityLevel => "i.security_level_id".into(),
         Kind::User { column, .. } => format!("i.{column}"),
         _ => unreachable!("only id-like fields have an id column"),
     }

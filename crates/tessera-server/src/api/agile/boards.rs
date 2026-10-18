@@ -15,7 +15,7 @@ use super::{
 };
 use crate::AppState;
 use crate::api::ApiVersion;
-use crate::api::access::browsable_projects;
+use crate::api::access::{browsable_projects, viewer_can_see};
 use crate::api::render::Ctx;
 use crate::api::search::parse_jql;
 use crate::auth::CurrentUser;
@@ -481,15 +481,15 @@ pub struct EpicListQuery {
     done: Option<bool>,
 }
 
-/// The epics in the board's project.
+/// The epics in the board's project that the user can see.
 pub async fn epics(
     State(state): State<AppState>,
-    CurrentUser(_): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
     Query(query): Query<EpicListQuery>,
 ) -> ApiResult<Json<Value>> {
     let board = find_board(&state, &id).await?;
-    let ctx = Ctx::new(&state, ApiVersion::V2).await?;
+    let ctx = Ctx::new(&state, ApiVersion::V2).await?.viewed_by(user.id);
     let project_ids: Vec<i64> = match board.project_id {
         Some(id) => vec![id],
         None => projects::list(&state.db)
@@ -506,7 +506,9 @@ pub async fn epics(
                 .fetch_all(&state.db)
                 .await?;
         for issue in issues::by_ids(&state.db, &candidates).await? {
-            if !is_epic(&ctx.catalog, &issue) {
+            if !is_epic(&ctx.catalog, &issue)
+                || !viewer_can_see(&state.db, ctx.viewer, &issue).await?
+            {
                 continue;
             }
             let epic = epic_json(&ctx, &issue).await?;

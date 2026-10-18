@@ -63,6 +63,7 @@ pub async fn run_query(
     let link_types = links::types(db).await?;
     let all_sprints = sprints::all(db).await?;
     let visible_filters = super::filters::visible(db, user).await?;
+    let security_levels = crate::store::security::all_levels(db).await?;
     let ctx = SearchContext {
         catalog: &catalog,
         custom: &custom,
@@ -73,6 +74,7 @@ pub async fn run_query(
         link_types: &link_types,
         sprints: &all_sprints,
         filters: &visible_filters,
+        security_levels: &security_levels,
         current_user: user.map(|u| u.id),
         now: now_ms(),
     };
@@ -91,6 +93,15 @@ pub async fn run_query(
             format!("({}) AND i.project_id IN ({marks})", compiled.filter)
         };
         compiled.binds.extend(ids.into_iter().map(Bind::Int));
+    }
+    // Nor are issues at security levels the user is not a member of.
+    let security = match user {
+        Some(user) => crate::api::access::security_filter(db, user).await?,
+        None => Some(("i.security_level_id IS NULL".to_string(), Vec::new())),
+    };
+    if let Some((condition, binds)) = security {
+        compiled.filter = format!("({}) AND {condition}", compiled.filter);
+        compiled.binds.extend(binds.into_iter().map(Bind::Int));
     }
 
     let arguments = |extra: &[i64]| {

@@ -7,6 +7,9 @@
 //!
 //! Projects a user cannot browse do not exist for them: reads answer 404, as Jira does. A user
 //! who can browse but lacks the permission for an action gets 403.
+//!
+//! A project may also have an issue security scheme. An issue at one of its levels exists only
+//! for the level's members, who are named with the same holder types as grants.
 
 use std::collections::HashSet;
 
@@ -18,7 +21,8 @@ use crate::store::groups;
 use crate::store::issues::{self, Issue};
 use crate::store::permissions::{self, Grant};
 use crate::store::projects::{self, Project};
-use crate::store::users::User;
+use crate::store::security::{self, Level, Member};
+use crate::store::users::{self, User};
 
 /// Every project permission: key, name, and what it allows.
 pub const PROJECT_PERMISSIONS: &[(&str, &str, &str)] = &[
@@ -52,6 +56,11 @@ pub const PROJECT_PERMISSIONS: &[(&str, &str, &str)] = &[
         "TRANSITION_ISSUES",
         "Transition Issues",
         "Ability to transition issues.",
+    ),
+    (
+        "SET_ISSUE_SECURITY",
+        "Set Issue Security",
+        "Ability to set the level of security on an issue so that only people in that security level can see the issue.",
     ),
     (
         "SCHEDULE_ISSUES",
@@ -230,11 +239,21 @@ pub struct Access {
     roles: HashSet<i64>,
     lead_id: Option<i64>,
     grants: Vec<Grant>,
+    /// The levels of the project's security scheme, and their members.
+    levels: Vec<Level>,
+    members: Vec<Member>,
 }
 
 impl Access {
     pub async fn load(db: &SqlitePool, user: &User, project: &Project) -> ApiResult<Access> {
         let scheme = permissions::project_scheme(db, project.id).await?;
+        let (levels, members) = match security::project_scheme(db, project.id).await? {
+            Some(scheme) => (
+                security::levels(db, scheme).await?,
+                security::scheme_members(db, scheme).await?,
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
         let mut groups = HashSet::new();
         for group in groups::of_user(db, user.id).await? {
             groups.insert(group.name.to_lowercase());
@@ -251,12 +270,54 @@ impl Access {
                 .collect(),
             lead_id: project.lead_id,
             grants: permissions::grants(db, scheme).await?,
+            levels,
+            members,
         })
     }
 
-    fn holds(&self, grant: &Grant, issue: Option<&Issue>) -> bool {
-        let param = grant.holder_parameter.as_deref().unwrap_or_default();
-        match grant.holder_type.as_str() {
+    /// Whether the user is a member of a security level, for one issue.
+    pub fn in_level(&self, level_id: i64, issue: Option<&Issue>) -> bool {
+        self.admin
+            || self.members.iter().any(|m| {
+                m.level_id == level_id
+                    && self.holds(&m.holder_type, m.holder_parameter.as_deref(), issue)
+            })
+    }
+
+    /// Whether the user can see an issue: they browse the project, and they are a member of
+    /// the issue's security level, if it has one.
+    pub fn can_see(&self, issue: &Issue) -> bool {
+        self.can_on("BROWSE_PROJECTS", Some(issue))
+            && issue
+                .security_level_id
+                .is_none_or(|level| self.in_level(level, Some(issue)))
+    }
+
+    /// Whether a level names a holder type among its members.
+    fn level_names(&self, level_id: i64, holder_type: &str) -> bool {
+        self.members
+            .iter()
+            .any(|m| m.level_id == level_id && m.holder_type == holder_type)
+    }
+
+    /// The levels of the project's security scheme.
+    pub fn levels(&self) -> &[Level] {
+        &self.levels
+    }
+
+    /// The levels the user may put an issue at: those they are a member of.
+    pub fn settable_levels(&self, issue: Option<&Issue>) -> Vec<Level> {
+        self.levels
+            .iter()
+            .filter(|l| self.in_level(l.id, issue))
+            .cloned()
+            .collect()
+    }
+
+    /// Whether the user is the holder a grant or a level member names.
+    fn holds(&self, holder_type: &str, parameter: Option<&str>, issue: Option<&Issue>) -> bool {
+        let param = parameter.unwrap_or_default();
+        match holder_type {
             "anyone" | "applicationRole" => true,
             "group" => self.groups.contains(&param.to_lowercase()),
             "user" => param == self.account_id,
@@ -278,10 +339,10 @@ impl Access {
     /// Whether the user has a permission for one issue, where reporter and assignee grants count.
     pub fn can_on(&self, permission: &str, issue: Option<&Issue>) -> bool {
         self.admin
-            || self
-                .grants
-                .iter()
-                .any(|g| g.permission == permission && self.holds(g, issue))
+            || self.grants.iter().any(|g| {
+                g.permission == permission
+                    && self.holds(&g.holder_type, g.holder_parameter.as_deref(), issue)
+            })
     }
 
     /// Whether the user may act on something they own (`own`) or on anyone's (`all`).
@@ -343,7 +404,7 @@ pub async fn require_issue(
         .await?
         .ok_or_else(ApiError::issue_not_found)?;
     let access = Access::load(&state.db, user, &project).await?;
-    if !access.can_on("BROWSE_PROJECTS", Some(issue)) {
+    if !access.can_see(issue) {
         return Err(ApiError::issue_not_found());
     }
     if !access.can_on(permission, Some(issue)) {
@@ -379,6 +440,27 @@ pub async fn find_issue_access(
     Ok((issue, access))
 }
 
+/// Whether the user a response is for can see an issue, for issues a response mentions in
+/// passing: links, parents, and subtasks. A response for nobody in particular shows only
+/// issues without a security level.
+pub async fn viewer_can_see(
+    db: &SqlitePool,
+    viewer: Option<i64>,
+    issue: &Issue,
+) -> ApiResult<bool> {
+    let user = match viewer {
+        Some(id) => users::by_id(db, id).await?,
+        None => None,
+    };
+    let Some(user) = user else {
+        return Ok(issue.security_level_id.is_none());
+    };
+    let Some(project) = projects::by_id(db, issue.project_id).await? else {
+        return Ok(false);
+    };
+    Ok(Access::load(db, &user, &project).await?.can_see(issue))
+}
+
 /// Fails with 403 unless `allowed`, using `permission` for the message.
 pub fn check(allowed: bool, permission: &str) -> ApiResult<()> {
     if allowed {
@@ -407,4 +489,58 @@ pub async fn browsable_projects(db: &SqlitePool, user: &User) -> ApiResult<Optio
         }
     }
     Ok(if every { None } else { Some(ids) })
+}
+
+/// A search condition that hides issues at security levels the user is not a member of, with
+/// its bound values in order. `None` when the user sees every level.
+pub async fn security_filter(
+    db: &SqlitePool,
+    user: &User,
+) -> ApiResult<Option<(String, Vec<i64>)>> {
+    if user.is_admin {
+        return Ok(None);
+    }
+    // (project, level) pairs: always visible, visible to the reporter, visible to the assignee.
+    let (mut always, mut reporter, mut assignee) = (Vec::new(), Vec::new(), Vec::new());
+    for project in projects::list(db).await? {
+        if security::project_scheme(db, project.id).await?.is_none() {
+            continue;
+        }
+        let access = Access::load(db, user, &project).await?;
+        for level in access.levels() {
+            if access.in_level(level.id, None) {
+                always.push((project.id, level.id));
+                continue;
+            }
+            if access.level_names(level.id, "reporter") {
+                reporter.push((project.id, level.id));
+            }
+            if access.level_names(level.id, "assignee") {
+                assignee.push((project.id, level.id));
+            }
+        }
+    }
+    let mut parts = vec!["i.security_level_id IS NULL".to_string()];
+    let mut binds = Vec::new();
+    let pairs = |list: &[(i64, i64)], binds: &mut Vec<i64>| -> String {
+        let values = vec!["(?, ?)"; list.len()].join(", ");
+        for (project, level) in list {
+            binds.extend([*project, *level]);
+        }
+        format!("(i.project_id, i.security_level_id) IN (VALUES {values})")
+    };
+    if !always.is_empty() {
+        parts.push(pairs(&always, &mut binds));
+    }
+    if !reporter.is_empty() {
+        let condition = pairs(&reporter, &mut binds);
+        parts.push(format!("({condition} AND i.reporter_id = ?)"));
+        binds.push(user.id);
+    }
+    if !assignee.is_empty() {
+        let condition = pairs(&assignee, &mut binds);
+        parts.push(format!("({condition} AND i.assignee_id = ?)"));
+        binds.push(user.id);
+    }
+    Ok(Some((format!("({})", parts.join(" OR ")), binds)))
 }

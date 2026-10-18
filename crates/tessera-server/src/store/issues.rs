@@ -33,6 +33,8 @@ pub struct Issue {
     /// Time tracking estimates, in seconds.
     pub original_estimate: Option<i64>,
     pub remaining_estimate: Option<i64>,
+    /// Who may see the issue, when not everyone who can browse the project may.
+    pub security_level_id: Option<i64>,
 }
 
 /// The columns every query of this table selects, for `concat!` into static SQL.
@@ -40,7 +42,8 @@ macro_rules! columns {
     () => {
         "id, project_id, number, key, issue_type_id, summary, description, environment, \
      status_id, priority_id, resolution_id, resolution_date, assignee_id, reporter_id, creator_id, \
-     parent_id, due_date, created_at, updated_at, original_estimate, remaining_estimate"
+     parent_id, due_date, created_at, updated_at, original_estimate, remaining_estimate, \
+     security_level_id"
     };
 }
 
@@ -82,6 +85,7 @@ pub struct IssueFields {
     pub remaining_estimate: Option<i64>,
     /// The open (future or active) sprint the issue is in. Closed sprints stay as history.
     pub open_sprint: Option<i64>,
+    pub security_level_id: Option<i64>,
     /// Custom field id and its JSON value. `None` clears the value.
     pub custom_values: Vec<(i64, Option<String>)>,
 }
@@ -110,6 +114,7 @@ impl IssueFields {
             original_estimate: issue.original_estimate,
             remaining_estimate: issue.remaining_estimate,
             open_sprint: open_sprint(db, issue.id).await?,
+            security_level_id: issue.security_level_id,
             custom_values: Vec::new(),
         })
     }
@@ -146,8 +151,8 @@ pub async fn create(
     let issue: Issue = sqlx::query_as(concat!("INSERT INTO issues (project_id, number, key, issue_type_id, summary, description, environment,
             description_text, environment_text, status_id, priority_id, resolution_id, resolution_date,
             assignee_id, reporter_id, creator_id, parent_id, due_date, created_at, updated_at,
-            original_estimate, remaining_estimate, lexo_rank)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            original_estimate, remaining_estimate, lexo_rank, security_level_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING ", columns!()))
     .bind(project_id)
     .bind(number)
@@ -172,6 +177,7 @@ pub async fn create(
     .bind(fields.original_estimate)
     .bind(fields.remaining_estimate)
     .bind(&rank)
+    .bind(fields.security_level_id)
     .fetch_one(&mut *tx)
     .await?;
     write_relations(&mut tx, issue.id, fields).await?;
@@ -193,7 +199,8 @@ pub async fn update(
         "UPDATE issues SET issue_type_id = ?, summary = ?, description = ?, environment = ?,
             description_text = ?, environment_text = ?, status_id = ?, priority_id = ?,
             resolution_id = ?, resolution_date = ?, assignee_id = ?, reporter_id = ?, parent_id = ?,
-            due_date = ?, original_estimate = ?, remaining_estimate = ?, updated_at = ?
+            due_date = ?, original_estimate = ?, remaining_estimate = ?, security_level_id = ?,
+            updated_at = ?
          WHERE id = ?",
     )
     .bind(fields.issue_type_id)
@@ -212,6 +219,7 @@ pub async fn update(
     .bind(&fields.due_date)
     .bind(fields.original_estimate)
     .bind(fields.remaining_estimate)
+    .bind(fields.security_level_id)
     .bind(now)
     .bind(issue_id)
     .execute(&mut *tx)
@@ -444,4 +452,18 @@ pub async fn statuses_in_use(
     .bind(issue_type_id)
     .fetch_all(db)
     .await
+}
+
+/// Gives an issue's subtasks its security level, which they always share.
+pub async fn set_subtask_security(
+    db: &SqlitePool,
+    parent_id: i64,
+    level: Option<i64>,
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE issues SET security_level_id = ? WHERE parent_id = ?")
+        .bind(level)
+        .bind(parent_id)
+        .execute(db)
+        .await?;
+    Ok(())
 }

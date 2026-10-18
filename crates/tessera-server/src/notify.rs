@@ -101,7 +101,7 @@ async fn queue(
             continue;
         }
         let can_see = match Access::load(&state.db, &user, &project).await {
-            Ok(access) => access.can_on("BROWSE_PROJECTS", Some(issue)),
+            Ok(access) => access.can_see(issue),
             Err(_) => false,
         };
         if can_see {
