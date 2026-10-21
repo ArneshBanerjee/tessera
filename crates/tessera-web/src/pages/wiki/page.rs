@@ -6,6 +6,7 @@ use leptos_router::components::A;
 use leptos_router::hooks::{use_navigate, use_params_map, use_query_map};
 use serde_json::{Value, json};
 
+use super::inline::CommentedBody;
 use super::restrictions::RestrictionsButton;
 use super::{adf_body, collection, content_path, kind_of_path, use_space};
 use crate::api;
@@ -92,8 +93,7 @@ fn PageBody(content: WikiContent, old: bool) -> impl IntoView {
                 <span>{format!("Last updated {} by {} (version {})", short_time(&updated.when), updated.by.display_name, updated.number)}</span>
             </p>
         </header>
-        // The server sanitizes the view format, so it is safe to insert as HTML.
-        <article class="wiki-body" inner_html=html></article>
+        <CommentedBody page_id=id.clone() kind=kind.clone() html=html current=!old/>
         <Attachments id=id.clone()/>
         <Labels id=id.clone() labels=labels/>
         <Comments id=id/>
@@ -377,7 +377,7 @@ fn Comments(id: String) -> impl IntoView {
         session.changes.track();
         async move {
             api::get::<WikiCollection<WikiContent>>(&format!(
-                "{}/content/{}/child/comment?expand=body.view,history,version,ancestors&depth=all&limit=500",
+                "{}/content/{}/child/comment?expand=body.view,history,version,ancestors&depth=all&location=footer&limit=500",
                 api::WIKI,
                 id.get_value()
             ))

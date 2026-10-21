@@ -15,6 +15,7 @@ use crate::AppState;
 use crate::api::extract::Json;
 use crate::auth::CurrentUser;
 use crate::store::content::{self, Content, ListFilter};
+use crate::store::inline_comments;
 use crate::store::labels;
 use crate::store::users::User;
 use crate::time;
@@ -36,6 +37,9 @@ pub struct ContentRequest {
     ancestors: Vec<Value>,
     #[serde(default)]
     container: Value,
+    /// For comments: `location` and, for inline ones, `inlineProperties.originalSelection`.
+    #[serde(default)]
+    extensions: Value,
     #[serde(default)]
     body: Value,
     #[serde(default)]
@@ -111,7 +115,27 @@ pub async fn create(
                 Some(id) => Some(find_current(&state, &user, &id).await?),
                 None => None,
             };
-            service::create_comment(&state, &user, &container, reply_to.as_ref(), &body).await?
+            let selection = request.extensions["inlineProperties"]["originalSelection"].as_str();
+            match (
+                request.extensions["location"].as_str(),
+                selection,
+                &reply_to,
+            ) {
+                // A new inline comment marks its text on the page.
+                (Some("inline"), Some(selection), None) => {
+                    let index = request.extensions["inlineProperties"]["matchIndex"]
+                        .as_u64()
+                        .unwrap_or(0) as usize;
+                    service::create_inline_comment(
+                        &state, &user, &container, selection, index, &body,
+                    )
+                    .await?
+                }
+                _ => {
+                    service::create_comment(&state, &user, &container, reply_to.as_ref(), &body)
+                        .await?
+                }
+            }
         }
         other => {
             return Err(WikiError::bad_request(format!(
@@ -316,6 +340,24 @@ pub async fn children_of_type(
         render::descendant_list(&state.db, &user, &found, &kind).await?
     } else {
         render::child_list(&state.db, &user, &found, &kind).await?
+    };
+    // `location` keeps footer comments, inline ones, or resolved inline ones.
+    let locations = params.all("location");
+    let items = if kind == "comment" && !locations.is_empty() {
+        let mut kept = Vec::new();
+        for item in items {
+            let location = match inline_comments::get(&state.db, item.id).await? {
+                None => "footer",
+                Some(inline) if inline.status(&found.body) == "resolved" => "resolved",
+                Some(_) => "inline",
+            };
+            if locations.iter().any(|l| l == location) {
+                kept.push(item);
+            }
+        }
+        kept
+    } else {
+        items
     };
     let path = format!("/content/{id}/child/{kind}");
     Ok(Json(list_of(&state, &user, items, &params, path).await?))

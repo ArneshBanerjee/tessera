@@ -49,15 +49,20 @@ check("v2 child pages", [c["title"] for c in wiki.get_child_pages(page_id)] == [
 titles = [p["title"] for p in wiki.get_pages(space_id=space_id, sort="title")]
 check("v2 pages in space", titles == ["Details", "Overview", "V2 Compat Home"])
 
-# The client's create_page_footer_comment posts to /comments, which Confluence does not have,
-# so this uses the client's request method with the real endpoint.
-comment = wiki.post(
-    "api/v2/footer-comments",
-    data={"pageId": page_id, "body": {"representation": "storage", "value": "<p>Nice page</p>"}},
-)
+comment = wiki.create_page_footer_comment(page_id, "<p>Nice page</p>")
 check("v2 footer comment", comment["pageId"] == page_id)
 comments = wiki.get_page_footer_comments(page_id, body_format="storage")
 check("v2 footer comments", comments[0]["body"]["storage"]["value"] == "<p>Nice page</p>")
+
+inline = wiki.create_page_inline_comment(
+    page_id,
+    "<p>Say more here</p>",
+    {"textSelection": "Second", "textSelectionMatchCount": 1, "textSelectionMatchIndex": 0},
+)
+check("v2 inline comment", inline["resolutionStatus"] == "open")
+inline_list = wiki.get_page_inline_comments(page_id)
+check("v2 inline comments", [c["properties"]["inlineOriginalSelection"] for c in inline_list] == ["Second"])
+check("v2 comment by id", wiki.get_comment_by_id(inline["id"])["id"] == inline["id"])
 
 versions = wiki.get_page_versions(page_id)
 check("v2 versions", [v["number"] for v in versions["results"]] == [2, 1])

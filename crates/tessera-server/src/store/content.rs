@@ -182,6 +182,25 @@ pub async fn update(db: &SqlitePool, content: &Content, edit: &Edit<'_>) -> sqlx
     Ok(by_id(db, content.id).await?.expect("content exists"))
 }
 
+/// Replaces the body of the current version in place, without a new version. Inline comment
+/// markers go in this way, as they do in Confluence.
+pub async fn set_marked_body(db: &SqlitePool, content: &Content, body: &str) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE content SET body = ?, body_text = ? WHERE id = ?")
+        .bind(body)
+        .bind(plain_text(body))
+        .bind(content.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE content_versions SET body = ? WHERE content_id = ? AND number = ?")
+        .bind(body)
+        .bind(content.id)
+        .bind(content.version)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}
+
 pub async fn by_id(db: &SqlitePool, id: i64) -> sqlx::Result<Option<Content>> {
     sqlx::query_as(concat!(
         "SELECT ",

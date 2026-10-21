@@ -22,6 +22,7 @@ use crate::AppState;
 use crate::api::extract::Json;
 use crate::auth::CurrentUser;
 use crate::store::content::{self, Content, ListFilter, Version};
+use crate::store::inline_comments;
 use crate::store::labels;
 use crate::store::spaces::{self, Space, SpaceFilter};
 use crate::store::users::{self, User};
@@ -69,6 +70,27 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_footer_comment),
         )
         .route("/footer-comments/{id}/children", get(comment_replies))
+        .route("/pages/{id}/inline-comments", get(inline_comments_of))
+        .route("/blogposts/{id}/inline-comments", get(inline_comments_of))
+        .route(
+            "/inline-comments",
+            get(list_inline_comments).post(create_inline_comment),
+        )
+        .route(
+            "/inline-comments/{id}",
+            get(get_inline_comment)
+                .put(update_inline_comment)
+                .delete(delete_footer_comment),
+        )
+        .route("/inline-comments/{id}/children", get(comment_replies))
+        .route("/comments", axum::routing::post(create_any_comment))
+        .route(
+            "/comments/{id}",
+            get(get_any_comment)
+                .put(update_any_comment)
+                .delete(delete_footer_comment),
+        )
+        .route("/comments/{id}/children", get(comment_replies))
         .route(
             "/attachments/{id}",
             get(get_attachment).delete(delete_attachment),
@@ -351,8 +373,39 @@ impl<'a> V2Ctx<'a> {
         if let Some(parent) = item.parent_id {
             out["parentCommentId"] = json!(parent.to_string());
         }
+        if let Some(inline) = inline_comments::get(&self.state.db, item.id).await? {
+            let page_body = container
+                .as_ref()
+                .map(|c| c.body.as_str())
+                .unwrap_or_default();
+            out["resolutionStatus"] = json!(inline.status(page_body));
+            out["properties"] = json!({
+                "inlineMarkerRef": inline.marker_ref,
+                "inlineOriginalSelection": inline.original_selection,
+            });
+            if let Some(by) = inline.resolution_by
+                && let Some(user) = users::by_id(&self.state.db, by).await?
+            {
+                out["resolutionLastModifierId"] = json!(user.account_id);
+            }
+            if let Some(at) = inline.resolution_at {
+                out["resolutionLastModifiedAt"] = json!(crate::time::format_iso(at));
+            }
+        }
         Ok(out)
     }
+}
+
+/// Keeps footer comments, or inline ones.
+async fn retain_location(state: &AppState, items: &mut Vec<Content>, inline: bool) -> V2Result<()> {
+    let mut kept = Vec::with_capacity(items.len());
+    for item in items.drain(..) {
+        if inline_comments::get(&state.db, item.id).await?.is_some() == inline {
+            kept.push(item);
+        }
+    }
+    *items = kept;
+    Ok(())
 }
 
 /// `body-format`, validated.
@@ -1005,11 +1058,12 @@ async fn footer_comments_of(
     params: Params,
 ) -> V2Result<Json<Value>> {
     let found = find_item(&state, &user, &id, true).await?;
-    let top: Vec<Content> = content::comments(&state.db, found.id)
+    let mut top: Vec<Content> = content::comments(&state.db, found.id)
         .await?
         .into_iter()
         .filter(|c| c.parent_id.is_none())
         .collect();
+    retain_location(&state, &mut top, false).await?;
     let path = format!("/{}s/{id}/footer-comments", found.content_type);
     Ok(Json(comments_page(&state, &top, &params, &path).await?))
 }
@@ -1028,9 +1082,248 @@ async fn list_footer_comments(
     )
     .await?;
     super::access::retain_visible(&state.db, &user, &mut all).await?;
+    retain_location(&state, &mut all, false).await?;
     Ok(Json(
         comments_page(&state, &all, &params, "/footer-comments").await?,
     ))
+}
+
+// `/comments`: the first form of the v2 comments API, which some clients still call. It
+// covers footer and inline comments alike.
+
+async fn create_any_comment(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(request): Json<Value>,
+) -> V2Result<Json<Value>> {
+    let parse = |e: serde_json::Error| WikiError::bad_request(e.to_string());
+    let inline_parent = match request.get("parentCommentId").and_then(service::content_id) {
+        Some(id) => match find_comment(&state, &user.0, &id).await {
+            Ok(parent) => inline_comments::get(&state.db, parent.id).await?.is_some(),
+            Err(_) => false,
+        },
+        None => false,
+    };
+    if request.get("inlineCommentProperties").is_some() || inline_parent {
+        let request: InlineRequest = serde_json::from_value(request).map_err(parse)?;
+        create_inline_comment(State(state), user, Json(request)).await
+    } else {
+        let request: CommentRequest = serde_json::from_value(request).map_err(parse)?;
+        create_footer_comment(State(state), user, Json(request)).await
+    }
+}
+
+async fn get_any_comment(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+    params: Params,
+) -> V2Result<Json<Value>> {
+    let found = find_comment(&state, &user, &id).await?;
+    Ok(Json(
+        V2Ctx::new(&state)
+            .comment(&found, body_format(&params)?)
+            .await?,
+    ))
+}
+
+async fn update_any_comment(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+    Json(request): Json<Value>,
+) -> V2Result<Json<Value>> {
+    let parse = |e: serde_json::Error| WikiError::bad_request(e.to_string());
+    let found = find_comment(&state, &user.0, &id).await?;
+    if inline_comments::get(&state.db, found.id).await?.is_some() {
+        let request: InlineUpdate = serde_json::from_value(request).map_err(parse)?;
+        update_inline_comment(State(state), user, Path(id), Json(request)).await
+    } else {
+        let request: CommentRequest = serde_json::from_value(request).map_err(parse)?;
+        update_footer_comment(State(state), user, Path(id), Json(request)).await
+    }
+}
+
+// Inline comments.
+
+/// Top-level inline comments on a page or blog post, optionally by `resolution-status`.
+async fn inline_comments_of(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+    params: Params,
+) -> V2Result<Json<Value>> {
+    let found = find_item(&state, &user, &id, true).await?;
+    let mut top: Vec<Content> = content::comments(&state.db, found.id)
+        .await?
+        .into_iter()
+        .filter(|c| c.parent_id.is_none())
+        .collect();
+    retain_location(&state, &mut top, true).await?;
+    let wanted = params.all("resolution-status");
+    if !wanted.is_empty() {
+        let mut kept = Vec::new();
+        for item in top {
+            if let Some(inline) = inline_comments::get(&state.db, item.id).await?
+                && wanted.iter().any(|w| w == inline.status(&found.body))
+            {
+                kept.push(item);
+            }
+        }
+        top = kept;
+    }
+    let path = format!("/{}s/{id}/inline-comments", found.content_type);
+    Ok(Json(comments_page(&state, &top, &params, &path).await?))
+}
+
+async fn list_inline_comments(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    params: Params,
+) -> V2Result<Json<Value>> {
+    let mut all = content::list(
+        &state.db,
+        &ListFilter {
+            content_type: Some("comment".into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    super::access::retain_visible(&state.db, &user, &mut all).await?;
+    retain_location(&state, &mut all, true).await?;
+    Ok(Json(
+        comments_page(&state, &all, &params, "/inline-comments").await?,
+    ))
+}
+
+async fn find_inline(state: &AppState, user: &User, id: &str) -> V2Result<Content> {
+    let found = find_comment(state, user, id).await?;
+    if inline_comments::get(&state.db, found.id).await?.is_none() {
+        return Err(WikiError::content_not_found(id).into());
+    }
+    Ok(found)
+}
+
+async fn get_inline_comment(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+    params: Params,
+) -> V2Result<Json<Value>> {
+    let found = find_inline(&state, &user, &id).await?;
+    Ok(Json(
+        V2Ctx::new(&state)
+            .comment(&found, body_format(&params)?)
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InlineRequest {
+    page_id: Option<Value>,
+    blog_post_id: Option<Value>,
+    parent_comment_id: Option<Value>,
+    #[serde(default)]
+    body: Value,
+    #[serde(default)]
+    inline_comment_properties: Value,
+}
+
+async fn create_inline_comment(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Json(request): Json<InlineRequest>,
+) -> V2Result<Json<Value>> {
+    let body = request_body(&request.body)?.unwrap_or_default();
+    let format = request_format(&request.body);
+    // A reply goes on the same text as the comment it answers.
+    if let Some(parent) = request
+        .parent_comment_id
+        .as_ref()
+        .and_then(service::content_id)
+    {
+        let parent = find_inline(&state, &user, &parent).await?;
+        let container_id = parent
+            .container_id
+            .ok_or_else(|| WikiError::bad_request("The comment is not on a page"))?;
+        let container = find_item(&state, &user, &container_id.to_string(), true).await?;
+        let created =
+            service::create_comment(&state, &user, &container, Some(&parent), &body).await?;
+        return Ok(Json(V2Ctx::new(&state).comment(&created, format).await?));
+    }
+    let container_id = request
+        .page_id
+        .as_ref()
+        .or(request.blog_post_id.as_ref())
+        .and_then(service::content_id)
+        .ok_or_else(|| {
+            WikiError::bad_request("pageId, blogPostId, or parentCommentId is required")
+        })?;
+    let container = find_item(&state, &user, &container_id, true).await?;
+    let properties = &request.inline_comment_properties;
+    let selection = properties["textSelection"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            WikiError::bad_request("inlineCommentProperties.textSelection is required")
+        })?;
+    let index = properties["textSelectionMatchIndex"].as_u64().unwrap_or(0) as usize;
+    let created =
+        service::create_inline_comment(&state, &user, &container, selection, index, &body).await?;
+    Ok(Json(V2Ctx::new(&state).comment(&created, format).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InlineUpdate {
+    #[serde(default)]
+    body: Value,
+    #[serde(default)]
+    version: Value,
+    resolved: Option<bool>,
+}
+
+/// `PUT /inline-comments/{id}`: a new body, or `resolved` to resolve or reopen the comment.
+async fn update_inline_comment(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+    Json(request): Json<InlineUpdate>,
+) -> V2Result<Json<Value>> {
+    let found = find_inline(&state, &user, &id).await?;
+    let inline = inline_comments::get(&state.db, found.id)
+        .await?
+        .expect("an inline comment");
+    if let Some(resolved) = request.resolved {
+        // Anyone who may comment on the page may resolve or reopen its comments.
+        super::access::require(&state.db, &user, found.space_id, "create", "comment").await?;
+        inline_comments::set_resolved(&state.db, &inline.marker_ref, resolved, user.id).await?;
+    }
+    let mut current = found.clone();
+    if let Some(body) = request_body(&request.body)? {
+        if found.creator_id != user.id && !user.is_admin {
+            return Err(WikiError::new(
+                StatusCode::FORBIDDEN,
+                "Only the author can edit a comment",
+            )
+            .into());
+        }
+        let save = Save {
+            number: request.version["number"]
+                .as_i64()
+                .ok_or_else(|| WikiError::bad_request("version.number is required"))?,
+            title: None,
+            body: Some(body),
+            status: "current",
+            parent: Parent::Keep,
+            message: request.version["message"].as_str().unwrap_or_default(),
+            minor_edit: false,
+        };
+        current = service::save(&state, &user, &found, save).await?;
+    }
+    let format = request_format(&request.body);
+    Ok(Json(V2Ctx::new(&state).comment(&current, format).await?))
 }
 
 async fn find_comment(state: &AppState, user: &User, id: &str) -> V2Result<Content> {

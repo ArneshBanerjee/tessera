@@ -10,6 +10,7 @@ use super::error::WikiResult;
 use super::service::{self, Names};
 use crate::AppState;
 use crate::store::content::{self, Content, Version};
+use crate::store::inline_comments;
 use crate::store::labels::{self, Label};
 use crate::store::space_permissions::{self, SpacePermission};
 use crate::store::spaces::{self, Space};
@@ -170,6 +171,33 @@ impl<'a> WikiCtx<'a> {
             },
             "_links": { "self": self.api_url(&format!("/user?accountId={}", user.account_id)) },
         })
+    }
+
+    /// `extensions` of a comment: its location, and for inline comments the text they are on
+    /// and their resolution, as Confluence shows them.
+    async fn comment_extensions(&self, comment: &Content) -> WikiResult<Value> {
+        let Some(inline) = inline_comments::get(&self.state.db, comment.id).await? else {
+            return Ok(json!({ "location": "footer" }));
+        };
+        let page_body = match comment.container_id {
+            Some(id) => content::by_id(&self.state.db, id)
+                .await?
+                .map(|c| c.body)
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        let status = inline.status(&page_body);
+        Ok(json!({
+            "location": "inline",
+            "inlineProperties": {
+                "markerRef": inline.marker_ref,
+                "originalSelection": inline.original_selection,
+            },
+            "resolution": {
+                "status": status,
+                "lastModified": inline.resolution_at.map(crate::time::format),
+            },
+        }))
     }
 
     pub async fn user_by_id(&mut self, id: i64) -> WikiResult<Value> {
@@ -385,6 +413,10 @@ impl<'a> WikiCtx<'a> {
                 "self": self.api_url(&format!("/content/{id}")),
             },
         });
+        // Comments say where they are: under the page, or on its text.
+        if content.content_type == "comment" {
+            out["extensions"] = self.comment_extensions(content).await?;
+        }
         if content.content_type == "attachment" {
             self.attachment_fields(content, &mut out).await?;
         }

@@ -2,6 +2,7 @@
 
 pub mod blog;
 pub mod editor;
+mod inline;
 pub mod page;
 mod restrictions;
 pub mod space_settings;

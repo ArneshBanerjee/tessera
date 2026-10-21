@@ -12,6 +12,7 @@ use crate::AppState;
 use crate::notify::{self, WikiEvent};
 use crate::store::attachments::SaveError;
 use crate::store::content::{self, Content, Edit, NewContent};
+use crate::store::inline_comments;
 use crate::store::space_permissions;
 use crate::store::spaces::{self, NewSpace, Space};
 use crate::store::users::{self, User};
@@ -104,6 +105,8 @@ pub fn sanitize(html: &str) -> String {
         .add_tag_attributes("input", ["type", "checked"])
         .add_tag_attributes("time", ["datetime"])
         .add_tag_attributes("ol", ["start"])
+        // Text with inline comments keeps the comment's marker reference.
+        .add_tag_attributes("span", ["data-ref"])
         // Task boxes are for show; they never accept input.
         .set_tag_attribute_value("input", "disabled", "disabled")
         .clean(html)
@@ -393,6 +396,119 @@ pub async fn create_comment(
     )
     .await;
     wiki_watchers::watch(&state.db, Target::Content(container.id), user.id).await?;
+    // A reply to an inline comment is inline too, on the same text.
+    if let Some(parent) = reply_to
+        && let Some(inline) = inline_comments::get(&state.db, parent.id).await?
+    {
+        inline_comments::create(
+            &state.db,
+            comment.id,
+            &inline.marker_ref,
+            &inline.original_selection,
+        )
+        .await?;
+    }
+    Ok(comment)
+}
+
+/// Escapes text the way storage format holds it.
+fn storage_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Wraps the `index`th occurrence (from zero) of `selection` in the page's text with an inline
+/// comment marker. The selection must sit inside one run of text, not across formatting or
+/// into a macro's settings. Returns the new body, or `None` when the text is not there.
+pub fn mark_selection(
+    storage: &str,
+    selection: &str,
+    index: usize,
+    reference: &str,
+) -> Option<String> {
+    let wanted = storage_escape(selection);
+    if wanted.trim().is_empty() {
+        return None;
+    }
+    // Text inside these elements is settings or code, not page text.
+    const SKIPPED: [&str; 3] = ["ac:parameter", "ac:plain-text-body", "ri:"];
+    let mut seen = 0;
+    let mut skip_depth = 0usize;
+    let mut position = 0;
+    while position < storage.len() {
+        let rest = &storage[position..];
+        if rest.starts_with("<![CDATA[") {
+            position += rest.find("]]>").map_or(rest.len(), |end| end + 3);
+            continue;
+        }
+        if rest.starts_with('<') {
+            let end = rest.find('>').map_or(rest.len(), |e| e + 1);
+            let tag = &rest[..end];
+            let name = tag
+                .trim_start_matches("</")
+                .trim_start_matches('<')
+                .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                .next()
+                .unwrap_or_default();
+            if SKIPPED.iter().any(|s| name.starts_with(s)) && !tag.ends_with("/>") {
+                if tag.starts_with("</") {
+                    skip_depth = skip_depth.saturating_sub(1);
+                } else {
+                    skip_depth += 1;
+                }
+            }
+            position += end;
+            continue;
+        }
+        let text_end = rest.find('<').map_or(storage.len(), |e| position + e);
+        if skip_depth == 0 {
+            let text = &storage[position..text_end];
+            let mut from = 0;
+            while let Some(found) = text[from..].find(&wanted) {
+                let at = position + from + found;
+                if seen == index {
+                    return Some(format!(
+                        "{}<ac:inline-comment-marker ac:ref=\"{reference}\">{wanted}</ac:inline-comment-marker>{}",
+                        &storage[..at],
+                        &storage[at + wanted.len()..]
+                    ));
+                }
+                seen += 1;
+                from += found + wanted.len();
+            }
+        }
+        position = text_end;
+    }
+    None
+}
+
+/// Adds an inline comment on the `index`th occurrence of `selection` in a page or blog post,
+/// marking that text in the page.
+pub async fn create_inline_comment(
+    state: &AppState,
+    user: &User,
+    container: &Content,
+    selection: &str,
+    index: usize,
+    body: &str,
+) -> WikiResult<Content> {
+    if !matches!(container.content_type.as_str(), "page" | "blogpost") {
+        return Err(WikiError::bad_request(
+            "Inline comments go on pages and blog posts",
+        ));
+    }
+    access::require(&state.db, user, container.space_id, "create", "comment").await?;
+    let reference = uuid::Uuid::new_v4().to_string();
+    let marked = mark_selection(&container.body, selection, index, &reference).ok_or_else(|| {
+        WikiError::bad_request(
+            "The selected text was not found on the page. Select text within one paragraph, without crossing formatting.",
+        )
+    })?;
+    content::set_marked_body(&state.db, container, &marked).await?;
+    let comment = create_comment(state, user, container, None, body).await?;
+    inline_comments::create(&state.db, comment.id, &reference, selection).await?;
     Ok(comment)
 }
 

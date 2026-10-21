@@ -13,6 +13,7 @@ pub mod epics;
 pub mod fields;
 pub mod filters;
 pub mod groups;
+pub mod inline_comments;
 pub mod issues;
 pub mod labels;
 pub mod links;

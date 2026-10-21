@@ -513,3 +513,21 @@ textarea.input { resize: vertical; }
 .find-empty { padding: 8px 12px; margin: 0; }
 .find-block .find-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .search-results-page { max-width: 860px; }
+
+/* Inline comments */
+.commented-body.with-panel { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+@media (max-width: 1000px) { .commented-body.with-panel { grid-template-columns: 1fr; } }
+.commented-text { position: relative; min-width: 0; }
+.inline-comment-button { position: absolute; z-index: 15; box-shadow: var(--shadow-raised); }
+.wiki-body .inline-comment-marker { background: #fdf0c2; border-bottom: 2px solid #e2b93b; cursor: pointer; }
+.wiki-body .inline-comment-marker.active { background: #f8dc7a; }
+.inline-panel { display: flex; flex-direction: column; gap: 10px; }
+.inline-panel:empty { display: none; }
+.inline-thread { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; cursor: default; }
+.inline-thread.focused, .inline-thread.composing { border-color: #e2b93b; box-shadow: 0 0 0 2px #fdf0c2; }
+.inline-thread.resolved { opacity: 0.7; }
+.inline-quote { margin: 0; padding: 2px 8px; border-left: 3px solid #e2b93b; color: var(--muted); font-size: 13px; }
+.inline-entry { display: flex; flex-direction: column; gap: 4px; }
+.inline-author { display: flex; gap: 6px; align-items: center; }
+.inline-actions { display: flex; gap: 12px; }
+.wiki-body .inline-comment-marker.resolved { background: none; border-bottom: 0; cursor: text; }

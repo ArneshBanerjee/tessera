@@ -312,7 +312,7 @@ impl Writer<'_> {
                 items[i..end].iter().map(|(m, n)| (&m[1..], *n)).collect();
             let mut text = String::new();
             self.marked_run(&inner, &mut text);
-            out.push_str(&wrap_mark(outer, text));
+            out.push_str(&wrap_mark(outer, text, self.view));
             i = end;
         }
     }
@@ -401,8 +401,17 @@ fn mark_attr<'a>(mark: &'a Mark, name: &str) -> &'a str {
         .unwrap_or_default()
 }
 
-fn wrap_mark(mark: &Mark, inner: String) -> String {
+fn wrap_mark(mark: &Mark, inner: String, view: bool) -> String {
     match mark.kind.as_str() {
+        // Text an inline comment is on.
+        "annotation" if view => format!(
+            "<span class=\"inline-comment-marker\" data-ref=\"{}\">{inner}</span>",
+            escape(mark_attr(mark, "id"))
+        ),
+        "annotation" => format!(
+            "<ac:inline-comment-marker ac:ref=\"{}\">{inner}</ac:inline-comment-marker>",
+            escape(mark_attr(mark, "id"))
+        ),
         "strong" => format!("<strong>{inner}</strong>"),
         "em" => format!("<em>{inner}</em>"),
         "code" => format!("<code>{inner}</code>"),
@@ -815,6 +824,17 @@ fn inline_element(element: ElementRef, marks: &[Mark], out: &mut Vec<Node>) {
         "code" => inline_children(element, &with(simple_mark("code")), out),
         "s" | "del" | "strike" => inline_children(element, &with(simple_mark("strike")), out),
         "u" => inline_children(element, &with(simple_mark("underline")), out),
+        "ac:inline-comment-marker" => {
+            let reference = element.value().attr("ac:ref").unwrap_or_default();
+            let mark = Mark {
+                kind: "annotation".into(),
+                attrs: attrs(&[
+                    ("id", json!(reference)),
+                    ("annotationType", json!("inlineComment")),
+                ]),
+            };
+            inline_children(element, &with(mark), out)
+        }
         "sub" | "sup" => {
             let mark = Mark {
                 kind: "subsup".into(),
@@ -925,6 +945,24 @@ mod tests {
         round_trip("<p>A <a href=\"https://example.com\">link</a> and a<br />break</p>");
         round_trip(
             "<table><tbody><tr><th><p>Head</p></th></tr><tr><td><p>Cell</p></td></tr></tbody></table>",
+        );
+    }
+
+    #[test]
+    fn keeps_inline_comment_markers() {
+        round_trip(
+            "<p>Ship <ac:inline-comment-marker ac:ref=\"c1\">the <strong>new</strong> build</ac:inline-comment-marker> today.</p>",
+        );
+        let adf = from_storage(
+            "<p><ac:inline-comment-marker ac:ref=\"c1\">noted</ac:inline-comment-marker></p>",
+        );
+        let mark = &adf.content[0].content[0].marks[0];
+        assert_eq!(mark.kind, "annotation");
+        assert_eq!(mark.attrs.as_ref().unwrap()["id"], "c1");
+        let view = to_view(&adf, &|_| None, &|_| None);
+        assert!(
+            view.contains("<span class=\"inline-comment-marker\" data-ref=\"c1\">noted</span>"),
+            "{view}"
         );
     }
 
