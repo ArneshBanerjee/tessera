@@ -24,7 +24,7 @@ pub const OPERATIONS: &[(&str, &str)] = &[
 ];
 
 /// What the default group may do in a new space.
-const GROUP_DEFAULTS: &[(&str, &str)] = &[
+pub const GROUP_DEFAULTS: &[(&str, &str)] = &[
     ("read", "space"),
     ("create", "page"),
     ("create", "blogpost"),

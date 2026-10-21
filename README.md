@@ -52,9 +52,11 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 **CQL** reuses the JQL parser: `type`, `space` (and `space.id`), `title`, `text`, `id`, `ancestor`, `parent`, `container`, `label`, `creator`, `contributor`, `created`, and `lastmodified`, with `~`, `IN`, comparisons, `currentUser()`, `now("-4w")`, `startOfDay()` and the other date functions, and `ORDER BY`. `/content/search` returns content; `/search` returns search results, including spaces for `type = space`.
 
+**Import**: Tessera reads Jira and Confluence backups (the zip from the backup manager, or its `entities.xml`, from Cloud or Data Center). From Jira it brings in users, groups, projects, components, versions, issues with their keys, descriptions and comments (wiki markup becomes ADF), links, subtasks, epics, labels, watchers, votes, worklogs, history, custom field values, attachments, and each project's workflow. From Confluence it brings in users, spaces with their permissions, pages and blog posts with every version, the page tree, comments with replies, labels, and attachments with their versions. Dates and authors stay as they were. People match existing users by email; new ones have no password until they reset it or an administrator sets one. See [Import a backup](#import-a-backup).
+
 ### Not yet built
 
-Import of Atlassian backups, a desktop app, more dashboard gadgets, and the products that follow: Service Management, Trello-style boards, and Statuspage.
+A desktop app, more dashboard gadgets, and the products that follow: Service Management, Trello-style boards, and Statuspage.
 
 ## Compatibility
 
@@ -93,6 +95,17 @@ Create an API token for scripts and clients:
 ./target/release/tessera create-token --email you@example.com
 ```
 
+## Import a backup
+
+Run the import on the server, with the zip from Jira's or Confluence's backup manager:
+
+```bash
+./target/release/tessera import-jira jira-backup.zip
+./target/release/tessera import-confluence confluence-backup.zip
+```
+
+Each import runs in one transaction, so a failed import changes nothing. Administrators can also upload a backup in the web app under Administration, Import, or post it to `/rest/tessera/1.0/admin/import/jira` (or `/confluence`) as the multipart field `file`. Use the command for very large backups.
+
 ## Test it
 
 ```bash
@@ -108,7 +121,7 @@ To work on the web app, run the server on port 8080 and `trunk serve` in `crates
 | Crate | Purpose |
 | --- | --- |
 | `tessera-jql` | JQL lexer and parser |
-| `tessera-adf` | Atlassian Document Format types, and conversion to and from plain text, Markdown, and Confluence's storage format |
+| `tessera-adf` | Atlassian Document Format types, and conversion to and from plain text, Markdown, and Confluence's storage format, and reading Jira wiki markup |
 | `tessera-server` | Storage (SQLite), the JQL to SQL compiler, the REST API, and serving the web app |
 | `tessera-web` | The web app (Leptos, compiled to WebAssembly) |
 
@@ -131,5 +144,5 @@ To work on the web app, run the server on port 8080 and `trunk serve` in `crates
 | 4. Boards | Saved filters, scrum and kanban boards, sprints, backlog, ranking, epics, and the Agile REST API. **Done.** |
 | 5. Web UI | Leptos (Rust compiled to WebAssembly) app. **First version done.** A Tauri desktop app follows. |
 | 6. Confluence core | Spaces, page tree, versions, comments, inline comments, labels, attachments, templates, CQL, the v1 and v2 APIs, and the web app with a rich-text editor. **Done.** |
-| 7. Migration | Import of Jira Cloud and Confluence backups. |
+| 7. Migration | Import of Jira and Confluence backups. **Done.** |
 | 8. Launch | Jira and Confluence together. Service Management, Trello-style boards, and Statuspage follow. |

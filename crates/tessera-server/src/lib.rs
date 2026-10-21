@@ -7,6 +7,7 @@ pub mod auth;
 pub mod confluence;
 pub mod db;
 pub mod error;
+pub mod import;
 pub mod jql;
 pub mod mail;
 pub mod notify;

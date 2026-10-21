@@ -558,3 +558,5 @@ textarea.input { resize: vertical; }
 .rich-editor th, .rich-editor td { border: 1px solid var(--border); min-width: 80px; padding: 4px 8px; }
 .rich-editor-frame .mention-menu { position: absolute; }
 .editor-mode { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.import-result { margin-top: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-sunken); }
+.import-result ul { margin: 6px 0; padding-left: 18px; }

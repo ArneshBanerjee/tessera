@@ -25,6 +25,11 @@ pub fn format(ms: i64) -> String {
     zoned(ms).strftime("%Y-%m-%dT%H:%M:%S%.3f%z").to_string()
 }
 
+/// Formats a timestamp's date, as Jira writes dates: `2026-10-13`.
+pub fn format_date(ms: i64) -> String {
+    zoned(ms).strftime("%Y-%m-%d").to_string()
+}
+
 /// Parses a Jira date-time such as `2026-10-13T09:30:00.000+0000` (also with `Z` or `+00:00`).
 pub fn parse_jira_datetime(text: &str) -> Option<i64> {
     let text = text.trim();

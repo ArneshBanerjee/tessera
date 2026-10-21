@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use clap::{Parser, Subcommand};
 use tessera_server::mail::Sender;
 use tessera_server::store::users::{self, NewUser};
-use tessera_server::{AppState, app, auth, db};
+use tessera_server::{AppState, app, auth, db, import};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -74,6 +74,16 @@ enum Command {
         email: String,
         #[arg(long, default_value = "cli")]
         label: String,
+    },
+    /// Import a Jira backup: the zip from Jira's backup manager, or its entities.xml.
+    ImportJira {
+        /// The backup file.
+        file: std::path::PathBuf,
+    },
+    /// Import a Confluence backup: the zip from Confluence's backup manager, or its entities.xml.
+    ImportConfluence {
+        /// The backup file.
+        file: std::path::PathBuf,
     },
 }
 
@@ -152,6 +162,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
             println!("Created {} ({})", user.email, user.account_id);
+        }
+        Command::ImportJira { file } => {
+            let summary = import::jira::import(&pool, &cli.data_dir, &file).await?;
+            println!("Imported the Jira backup:\n{summary}");
+        }
+        Command::ImportConfluence { file } => {
+            let summary = import::confluence::import(&pool, &cli.data_dir, &file).await?;
+            println!("Imported the Confluence backup:\n{summary}");
         }
         Command::CreateToken { email, label } => {
             let user = users::by_email(&pool, &email)

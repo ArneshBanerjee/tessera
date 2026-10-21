@@ -10,6 +10,7 @@ pub mod editor;
 #[cfg(feature = "html")]
 pub mod html;
 pub mod markdown;
+pub mod wiki;
 
 pub use markdown::{from_markdown, to_markdown};
 use serde::{Deserialize, Serialize};
