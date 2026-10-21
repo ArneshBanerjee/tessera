@@ -609,7 +609,7 @@ fn id_of(value: &Value) -> Option<i64> {
 }
 
 /// `PUT /issuesecurityschemes/project`: gives a project a scheme, moving its issues' levels
-/// as the mappings say. Levels without a mapping are cleared.
+/// as the mappings say. Every level issues use needs a mapping, unless the scheme is removed.
 pub async fn associate(
     State(state): State<AppState>,
     AdminUser(_): AdminUser,
@@ -629,17 +629,51 @@ pub async fn associate(
         Some(id) => Some(find_scheme(&state, id).await?),
         None => None,
     };
+    // `-1` (or nothing) as the new level means "no level".
     let mut mapping = Vec::new();
     for item in &request.old_to_new_security_level_mappings {
-        let old = item.old_level_id.parse::<i64>().ok();
-        let new = item.new_level_id.parse::<i64>().ok();
-        let (Some(old), Some(new)) = (old, new) else {
-            return Err(ApiError::bad_request("Level mappings need valid ids."));
+        let old = item
+            .old_level_id
+            .parse::<i64>()
+            .map_err(|_| ApiError::bad_request("Level mappings need valid ids."))?;
+        let new = match item.new_level_id.trim() {
+            "" | "-1" => None,
+            text => Some(
+                text.parse::<i64>()
+                    .map_err(|_| ApiError::bad_request("Level mappings need valid ids."))?,
+            ),
         };
-        if let Some(scheme) = &scheme {
-            find_level(&state, scheme, new).await?;
+        match (&scheme, new) {
+            (Some(scheme), Some(new)) => {
+                find_level(&state, scheme, new).await?;
+            }
+            (None, Some(_)) => {
+                return Err(ApiError::bad_request(
+                    "Without a scheme, issues can only lose their levels.",
+                ));
+            }
+            _ => {}
         }
-        mapping.push((old, Some(new)));
+        mapping.push((old, new));
+    }
+    // As in Jira, moving to another scheme needs a new level for each level issues use.
+    // Removing the scheme clears every level.
+    let current = security::project_scheme(&state.db, project.id).await?;
+    if let Some(scheme) = &scheme
+        && current != Some(scheme.id)
+    {
+        let unmapped: Vec<i64> = security::levels_in_use(&state.db, project.id)
+            .await?
+            .into_iter()
+            .filter(|level| !mapping.iter().any(|(old, _)| old == level))
+            .collect();
+        if !unmapped.is_empty() {
+            let ids: Vec<String> = unmapped.iter().map(i64::to_string).collect();
+            return Err(ApiError::bad_request(format!(
+                "Issues in the project use security levels {}. Map each to a level of the new scheme, or to -1 for none.",
+                ids.join(", ")
+            )));
+        }
     }
     security::set_project_scheme(&state.db, project.id, scheme.map(|s| s.id), &mapping).await?;
     Ok(StatusCode::NO_CONTENT)

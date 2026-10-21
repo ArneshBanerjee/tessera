@@ -9,7 +9,8 @@
 //! who can browse but lacks the permission for an action gets 403.
 //!
 //! A project may also have an issue security scheme. An issue at one of its levels exists only
-//! for the level's members, who are named with the same holder types as grants.
+//! for the level's members, who are named with the same holder types as grants. As in Jira, this
+//! holds for site administrators too.
 
 use std::collections::HashSet;
 
@@ -276,12 +277,14 @@ impl Access {
     }
 
     /// Whether the user is a member of a security level, for one issue.
+    ///
+    /// As in Jira, being a site administrator does not make anyone a member: a level's issues
+    /// are seen only by the people it names.
     pub fn in_level(&self, level_id: i64, issue: Option<&Issue>) -> bool {
-        self.admin
-            || self.members.iter().any(|m| {
-                m.level_id == level_id
-                    && self.holds(&m.holder_type, m.holder_parameter.as_deref(), issue)
-            })
+        self.members.iter().any(|m| {
+            m.level_id == level_id
+                && self.holds(&m.holder_type, m.holder_parameter.as_deref(), issue)
+        })
     }
 
     /// Whether the user can see an issue: they browse the project, and they are a member of
@@ -492,14 +495,11 @@ pub async fn browsable_projects(db: &SqlitePool, user: &User) -> ApiResult<Optio
 }
 
 /// A search condition that hides issues at security levels the user is not a member of, with
-/// its bound values in order. `None` when the user sees every level.
+/// its bound values in order. Site administrators get one too.
 pub async fn security_filter(
     db: &SqlitePool,
     user: &User,
 ) -> ApiResult<Option<(String, Vec<i64>)>> {
-    if user.is_admin {
-        return Ok(None);
-    }
     // (project, level) pairs: always visible, visible to the reporter, visible to the assignee.
     let (mut always, mut reporter, mut assignee) = (Vec::new(), Vec::new(), Vec::new());
     for project in projects::list(db).await? {

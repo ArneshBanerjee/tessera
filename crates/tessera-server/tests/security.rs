@@ -137,6 +137,24 @@ async fn security_levels_decide_who_sees_an_issue() {
     expected.sort();
     assert_eq!(found(&app, &dev, "project = SEC").await, expected);
 
+    // As in Jira, a site administrator outside a level does not see its issues either: the
+    // administrator is not in the staff group, nor the reporter of Dev's issue.
+    let (status, _) = app.get(&format!("{API}/issue/{mine}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        !found(&app, &app.admin, "project = SEC")
+            .await
+            .contains(&mine)
+    );
+    let (_, me) = app.get(&format!("{API}/myself")).await;
+    app.post(
+        &format!("{API}/group/user?groupname=staff"),
+        json!({ "accountId": me["accountId"] }),
+    )
+    .await;
+    let (status, _) = app.get(&format!("{API}/issue/{mine}")).await;
+    assert_eq!(status, StatusCode::OK);
+
     // Only project administrators may set a level, and only to levels they belong to.
     let (status, _) = app
         .request(
@@ -261,6 +279,62 @@ async fn security_levels_decide_who_sees_an_issue() {
         .get(&format!("{API}/issue/{hidden}?fields=security"))
         .await;
     assert_eq!(issue["fields"]["security"]["name"], "Staff");
+
+    // Moving to another scheme needs a new level for each level issues use, as in Jira.
+    let (_, other) = app
+        .post(
+            &format!("{API}/issuesecurityschemes"),
+            json!({ "name": "Other", "levels": [{ "name": "Internal", "members": [{ "type": "reporter" }] }] }),
+        )
+        .await;
+    let other_id = other["id"].as_str().unwrap().to_string();
+    let (_, other_scheme) = app
+        .get(&format!("{API}/issuesecurityschemes/{other_id}"))
+        .await;
+    let internal = level_id(&other_scheme, "Internal");
+    let (status, refused) = app
+        .put(
+            &format!("{API}/issuesecurityschemes/project"),
+            json!({ "schemeId": other_id, "projectId": project_id }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let (status, _) = app
+        .put(
+            &format!("{API}/issuesecurityschemes/project"),
+            json!({
+                "schemeId": other_id,
+                "projectId": project_id,
+                "oldToNewSecurityLevelMappings": [{ "oldLevelId": staff, "newLevelId": internal }],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, issue) = app
+        .get(&format!("{API}/issue/{hidden}?fields=security"))
+        .await;
+    assert_eq!(issue["fields"]["security"]["name"], "Internal");
+    // And back again, this time with the levels dropped.
+    let (status, _) = app
+        .put(
+            &format!("{API}/issuesecurityschemes/project"),
+            json!({
+                "schemeId": scheme_id,
+                "projectId": project_id,
+                "oldToNewSecurityLevelMappings": [{ "oldLevelId": internal, "newLevelId": "-1" }],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        found(&app, &app.admin, "level is not EMPTY").await,
+        Vec::<String>::new()
+    );
+    app.put(
+        &format!("{API}/issue/{hidden}"),
+        json!({ "fields": { "security": { "id": staff } } }),
+    )
+    .await;
 
     // A scheme in use cannot be deleted; without it, every issue is open again.
     let (status, _) = app

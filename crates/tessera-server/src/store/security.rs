@@ -90,6 +90,17 @@ pub async fn project_scheme(db: &SqlitePool, project_id: i64) -> sqlx::Result<Op
         .await
 }
 
+/// The levels a project's issues use.
+pub async fn levels_in_use(db: &SqlitePool, project_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT security_level_id FROM issues
+         WHERE project_id = ? AND security_level_id IS NOT NULL ORDER BY security_level_id",
+    )
+    .bind(project_id)
+    .fetch_all(db)
+    .await
+}
+
 /// Gives a project a scheme (or none). Each issue's level moves to the level `mapping` names
 /// for it, or is cleared when the mapping has none.
 pub async fn set_project_scheme(

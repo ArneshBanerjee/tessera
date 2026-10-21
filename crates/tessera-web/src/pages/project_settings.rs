@@ -291,7 +291,28 @@ fn WorkflowScheme() -> impl IntoView {
     }
 }
 
-/// The project's issue security scheme. Changing it clears the levels of the project's issues.
+/// The levels of a scheme, as (id, name).
+async fn scheme_levels(id: &str) -> Vec<(String, String)> {
+    if id.is_empty() {
+        return Vec::new();
+    }
+    api::get::<Value>(&format!("{}/issuesecurityschemes/{id}", api::CORE))
+        .await
+        .ok()
+        .and_then(|s| s["levels"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .map(|l| {
+            (
+                l["id"].as_str().unwrap_or_default().to_string(),
+                l["name"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The project's issue security scheme. As in Jira, moving to another scheme asks where the
+/// issues at each current level should go.
 #[component]
 fn SecurityScheme() -> impl IntoView {
     let session = use_session();
@@ -329,11 +350,15 @@ fn SecurityScheme() -> impl IntoView {
                     )
                 })
                 .collect();
-            (id, schemes, current_id)
+            let current_levels = scheme_levels(&current_id).await;
+            (id, schemes, current_id, current_levels)
         }
     });
-    let change = move |scheme: String| {
-        let Some((project_id, _, _)) = loaded.get_untracked() else {
+    // The scheme picked but not saved yet, its levels, and where each current level goes.
+    let pending = RwSignal::new(None::<(String, Vec<(String, String)>)>);
+    let mapping = RwSignal::new(Vec::<(String, String)>::new());
+    let save = move |scheme: String, mapping: Vec<(String, String)>| {
+        let Some((project_id, _, _, _)) = loaded.get_untracked() else {
             return;
         };
         let scheme = if scheme.is_empty() {
@@ -341,8 +366,12 @@ fn SecurityScheme() -> impl IntoView {
         } else {
             scheme
         };
+        let mappings: Vec<Value> = mapping
+            .iter()
+            .map(|(old, new)| json!({ "oldLevelId": old, "newLevelId": if new.is_empty() { "-1" } else { new.as_str() } }))
+            .collect();
         spawn_local(async move {
-            let body = json!({ "schemeId": scheme, "projectId": project_id });
+            let body = json!({ "schemeId": scheme, "projectId": project_id, "oldToNewSecurityLevelMappings": mappings });
             match api::request(
                 gloo_net::http::Method::PUT,
                 &format!("{}/issuesecurityschemes/project", api::CORE),
@@ -352,18 +381,47 @@ fn SecurityScheme() -> impl IntoView {
             {
                 Ok(_) => {
                     error.set(None);
+                    pending.set(None);
                     session.changed();
                 }
                 Err(e) => error.set(Some(e.message)),
             }
         });
     };
+    let pick = move |scheme: String| {
+        let Some((_, _, current, current_levels)) = loaded.get_untracked() else {
+            return;
+        };
+        if scheme == current {
+            pending.set(None);
+            return;
+        }
+        // Without current levels, or when removing the scheme, there is nothing to map.
+        if current_levels.is_empty() || scheme.is_empty() {
+            save(scheme, Vec::new());
+            return;
+        }
+        spawn_local(async move {
+            let levels = scheme_levels(&scheme).await;
+            mapping.set(
+                current_levels
+                    .iter()
+                    .map(|(id, _)| (id.clone(), String::new()))
+                    .collect(),
+            );
+            pending.set(Some((scheme, levels)));
+        });
+    };
     view! {
         <section class="settings-card">
             <h2>"Issue security"</h2>
-            <p class="muted small">"Issues lose their security level when the scheme changes."</p>
-            <select class="select" aria-label="Issue security scheme" on:change:target=move |ev| change(ev.target().value())>
-                {move || loaded.get().map(|(_, all, current)| view! {
+            <p class="muted small">"Only members of an issue's security level see the issue."</p>
+            <select class="select" aria-label="Issue security scheme"
+                prop:value=move || pending.get().map(|(scheme, _)| scheme)
+                    .or_else(|| loaded.get().map(|l| l.2))
+                    .unwrap_or_default()
+                on:change:target=move |ev| pick(ev.target().value())>
+                {move || loaded.get().map(|(_, all, current, _)| view! {
                     <option value="" selected=current.is_empty()>"None"</option>
                     {all.into_iter().map(|(id, name)| {
                         let selected = id == current;
@@ -371,6 +429,46 @@ fn SecurityScheme() -> impl IntoView {
                     }).collect_view()}
                 })}
             </select>
+            {move || pending.get().map(|(scheme, levels)| {
+                let current_levels = loaded.get().map(|l| l.3).unwrap_or_default();
+                let scheme_for_save = scheme.clone();
+                view! {
+                    <div class="level-mapping">
+                        <p class="small">"Pick a level in the new scheme for the issues at each current level."</p>
+                        <table class="issue-table">
+                            <thead><tr><th>"Current level"</th><th>"New level"</th></tr></thead>
+                            <tbody>
+                                {current_levels.into_iter().map(|(old, name)| {
+                                    let levels = levels.clone();
+                                    view! {
+                                        <tr>
+                                            <td>{name}</td>
+                                            <td>
+                                                <select class="select" aria-label="New level"
+                                                    on:change:target=move |ev| {
+                                                        let value = ev.target().value();
+                                                        mapping.update(|m| {
+                                                            if let Some(entry) = m.iter_mut().find(|(o, _)| *o == old) {
+                                                                entry.1 = value;
+                                                            }
+                                                        });
+                                                    }>
+                                                    <option value="">"None"</option>
+                                                    {levels.into_iter().map(|(id, name)| view! { <option value=id>{name}</option> }).collect_view()}
+                                                </select>
+                                            </td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                        <div class="form-actions">
+                            <button class="button primary" on:click=move |_| save(scheme_for_save.clone(), mapping.get())>"Change scheme"</button>
+                            <button class="button subtle" on:click=move |_| { pending.set(None); session.changed(); }>"Cancel"</button>
+                        </div>
+                    </div>
+                }
+            })}
             <ErrorText error=error/>
         </section>
     }

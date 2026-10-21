@@ -469,3 +469,4 @@ textarea.input { resize: vertical; }
 .template-list { list-style: none; margin: 0 0 12px; padding: 0; }
 .template-list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .template-list li .link-button { margin-left: auto; }
+.level-mapping { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
