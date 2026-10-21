@@ -13,16 +13,41 @@ use crate::components::{Avatar, ErrorText, Lozenge, TypeIcon};
 use crate::model::{Filter, Issue, SearchPage, short_time};
 use crate::pages::projects::use_project;
 
-/// A table of issues with the usual columns.
+/// A table of issues with the usual columns. With `selected`, each row gets a checkbox for
+/// bulk change, and the header one selects every row shown.
 #[component]
-pub fn IssueTable(issues: Vec<Issue>) -> impl IntoView {
+pub fn IssueTable(
+    issues: Vec<Issue>,
+    #[prop(optional)] selected: Option<RwSignal<Vec<String>>>,
+) -> impl IntoView {
     if issues.is_empty() {
         return view! { <p class="empty">"No issues match."</p> }.into_any();
     }
+    let shown: Vec<String> = issues.iter().map(|i| i.key.clone()).collect();
+    let all_checked = {
+        let shown = shown.clone();
+        move || selected.is_some_and(|s| s.with(|sel| shown.iter().all(|k| sel.contains(k))))
+    };
+    let toggle_all = move |checked: bool| {
+        if let Some(selected) = selected {
+            selected.update(|sel| {
+                sel.retain(|k| !shown.contains(k));
+                if checked {
+                    sel.extend(shown.iter().cloned());
+                }
+            });
+        }
+    };
     view! {
         <table class="issue-table">
             <thead>
                 <tr>
+                    {selected.is_some().then(|| view! {
+                        <th class="check-cell">
+                            <input type="checkbox" aria-label="Select all shown issues" prop:checked=all_checked.clone()
+                                on:change:target=move |ev| toggle_all(ev.target().checked())/>
+                        </th>
+                    })}
                     <th>"Type"</th><th>"Key"</th><th>"Summary"</th><th>"Status"</th>
                     <th>"Assignee"</th><th>"Priority"</th><th>"Updated"</th>
                 </tr>
@@ -33,8 +58,29 @@ pub fn IssueTable(issues: Vec<Issue>) -> impl IntoView {
                     let href = format!("/browse/{}", issue.key);
                     let assignee = fields.assignee.clone();
                     let assignee_name = assignee.as_ref().map(|u| u.display_name.clone()).unwrap_or_else(|| "Unassigned".into());
+                    let key = issue.key.clone();
                     view! {
                         <tr>
+                            {selected.map(|selected| {
+                                let key = key.clone();
+                                let checked = {
+                                    let key = key.clone();
+                                    move || selected.with(|sel| sel.contains(&key))
+                                };
+                                view! {
+                                    <td class="check-cell">
+                                        <input type="checkbox" aria-label=format!("Select {key}") prop:checked=checked
+                                            on:change:target=move |ev| {
+                                                let on = ev.target().checked();
+                                                let key = key.clone();
+                                                selected.update(|sel| {
+                                                    sel.retain(|k| *k != key);
+                                                    if on { sel.push(key); }
+                                                });
+                                            }/>
+                                    </td>
+                                }
+                            })}
                             <td><TypeIcon item=fields.issuetype/></td>
                             <td><A href=href.clone() attr:class="issue-key">{issue.key}</A></td>
                             <td><A href=href attr:class="summary-link">{fields.summary}</A></td>
@@ -57,6 +103,8 @@ fn Results(jql: Signal<String>) -> impl IntoView {
     let session = use_session();
     let start = RwSignal::new(0i64);
     const PAGE: i64 = 50;
+    let selected = RwSignal::new(Vec::<String>::new());
+    let bulk = RwSignal::new(false);
     let results = LocalResource::new(move || {
         let jql = jql.get();
         let start_at = start.get();
@@ -74,7 +122,14 @@ fn Results(jql: Signal<String>) -> impl IntoView {
                         <div class="result-summary muted">
                             {if total == 0 { "No issues".to_string() } else { format!("{} to {} of {} issues", start_at + 1, shown_to, total) }}
                         </div>
-                        <IssueTable issues=issues/>
+                        {move || (!selected.get().is_empty()).then(|| view! {
+                            <div class="bulk-bar">
+                                <strong>{format!("{} selected", selected.get().len())}</strong>
+                                <button class="button primary small" on:click=move |_| bulk.set(true)>"Bulk change"</button>
+                                <button class="button subtle small" on:click=move |_| selected.set(Vec::new())>"Clear"</button>
+                            </div>
+                        })}
+                        <IssueTable issues=issues selected=selected/>
                         <div class="pager">
                             <button class="button" disabled=!has_prev on:click=move |_| start.update(|s| *s = (*s - PAGE).max(0))>"Previous"</button>
                             <button class="button" disabled=!has_next on:click=move |_| start.update(|s| *s += PAGE)>"Next"</button>
@@ -84,6 +139,15 @@ fn Results(jql: Signal<String>) -> impl IntoView {
                 Err(error) => view! { <p class="error-text" role="alert">{error.message}</p> }.into_any(),
             })}
         </Transition>
+        <Show when=move || bulk.get()>
+            <super::bulk::BulkChange keys=selected.get_untracked()
+                on_close=Callback::new(move |done: bool| {
+                    bulk.set(false);
+                    if done {
+                        selected.set(Vec::new());
+                    }
+                })/>
+        </Show>
     }
 }
 

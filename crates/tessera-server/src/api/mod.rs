@@ -7,6 +7,7 @@ pub mod access;
 mod account;
 pub mod agile;
 pub mod attachments;
+mod bulk;
 mod comments;
 mod dashboards;
 pub mod extract;
@@ -423,6 +424,21 @@ fn jira_routes() -> Router<AppState> {
             "/project/{id_or_key}/version",
             get(parts::project_versions_paged),
         )
+        // Bulk operations
+        .route("/issue/bulk", post(bulk::create))
+        .route(
+            "/bulk/issues/fields",
+            get(bulk::editable_fields).post(bulk::edit),
+        )
+        .route(
+            "/bulk/issues/transition",
+            get(bulk::available_transitions).post(bulk::transition),
+        )
+        .route("/bulk/issues/delete", post(bulk::delete))
+        .route("/bulk/issues/move", post(bulk::move_issues))
+        .route("/bulk/issues/watch", post(bulk::watch))
+        .route("/bulk/issues/unwatch", post(bulk::unwatch))
+        .route("/bulk/queue/{task}", get(bulk::progress))
         // Dashboards
         .route("/dashboard", get(dashboards::list).post(dashboards::create))
         .route("/dashboard/search", get(dashboards::search))

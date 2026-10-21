@@ -3,6 +3,7 @@
 
 pub mod attachments;
 pub mod boards;
+pub mod bulk;
 pub mod changelog;
 pub mod comments;
 pub mod components;

@@ -24,6 +24,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::store::changelog::{self, Changelog};
 use crate::store::issues::{self, Issue, IssueFields};
 use crate::store::social::{self, List};
+use crate::store::users::User;
 use crate::store::{comments, projects, security, users, workflows};
 use crate::time::{format, now_ms};
 
@@ -558,12 +559,33 @@ fn sync_resolution_date(before: Option<i64>, fields: &mut IssueFields) {
     }
 }
 
+/// `POST /issue`.
 pub async fn create(
     State(state): State<AppState>,
     Extension(version): Extension<ApiVersion>,
     CurrentUser(user): CurrentUser,
     Json(request): Json<IssueRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
+    let issue = create_issue(&state, version, &user, &request).await?;
+    let ctx = Ctx::new(&state, version).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": issue.id.to_string(),
+            "key": issue.key,
+            "self": ctx.api_url(&format!("/issue/{}", issue.id)),
+        })),
+    ))
+}
+
+/// Creates one issue from a request, with every check and notification. Bulk create uses it
+/// for each issue.
+pub async fn create_issue(
+    state: &AppState,
+    version: ApiVersion,
+    user: &User,
+    request: &IssueRequest,
+) -> ApiResult<Issue> {
     let project_ref = request
         .fields
         .get("project")
@@ -584,7 +606,7 @@ pub async fn create(
         .await?
         .ok_or_else(|| ApiError::field("project", "Specify a valid project ID or key"))?;
     // A project the user cannot see is reported the same way as one that does not exist.
-    let access = Access::load(&state.db, &user, &project).await?;
+    let access = Access::load(&state.db, user, &project).await?;
     if !access.can("BROWSE_PROJECTS") {
         return Err(ApiError::field(
             "project",
@@ -601,7 +623,7 @@ pub async fn create(
         return Err(ApiError::field("issuetype", "Specify an issue type"));
     }
 
-    let mut ctx = Ctx::new(&state, version).await?;
+    let mut ctx = Ctx::new(state, version).await?;
     let custom = CustomCatalog::load(&state.db).await?;
     let mut fields = IssueFields {
         priority_id: ctx.catalog.default_priority(),
@@ -654,15 +676,8 @@ pub async fn create(
         comments::create(&state.db, issue.id, user.id, body).await?;
     }
     let mentioned = notify::new_mentions(issue.description.as_deref(), None);
-    notify::issue_with_mentions(&state, &user, &issue, IssueEvent::Created, &mentioned).await;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "id": issue.id.to_string(),
-            "key": issue.key,
-            "self": ctx.api_url(&format!("/issue/{}", issue.id)),
-        })),
-    ))
+    notify::issue_with_mentions(state, user, &issue, IssueEvent::Created, &mentioned).await;
+    Ok(issue)
 }
 
 /// Checks that a user may put an issue at a security level: they hold Set Issue Security and
@@ -815,6 +830,21 @@ pub async fn delete(
     Query(query): Query<DeleteQuery>,
 ) -> ApiResult<StatusCode> {
     let issue = find_issue_as(&state, &user, &id_or_key, "DELETE_ISSUES").await?;
+    let delete_subtasks = query
+        .delete_subtasks
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    delete_issue(&state, &user, &issue, delete_subtasks, true).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deletes an issue the user may delete, and its subtasks when `delete_subtasks` is set.
+pub async fn delete_issue(
+    state: &AppState,
+    user: &User,
+    issue: &Issue,
+    delete_subtasks: bool,
+    send_notifications: bool,
+) -> ApiResult<()> {
     let catalog = crate::store::meta::Catalog::load(&state.db).await?;
     let subtasks: Vec<Issue> = issues::subtasks(&state.db, issue.id)
         .await?
@@ -825,21 +855,20 @@ pub async fn delete(
                 .is_some_and(|t| t.is_subtask())
         })
         .collect();
-    let delete_subtasks = query
-        .delete_subtasks
-        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
     if !subtasks.is_empty() && !delete_subtasks {
         return Err(ApiError::bad_request(
             "The issue has subtasks. Use the parameter deleteSubtasks=true to delete the issue and its subtasks.",
         ));
     }
     // Tell people before the issue and its watchers are gone.
-    notify::issue(&state, &user, &issue, IssueEvent::Deleted).await;
+    if send_notifications {
+        notify::issue(state, user, issue, IssueEvent::Deleted).await;
+    }
     for subtask in subtasks {
         issues::delete(&state.db, subtask.id).await?;
     }
     issues::delete(&state.db, issue.id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 /// `PUT /issue/{idOrKey}/assignee` with `{"accountId": ...}`. `null` unassigns.

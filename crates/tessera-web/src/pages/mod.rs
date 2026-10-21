@@ -4,6 +4,7 @@ pub mod admin;
 pub mod admin_security;
 pub mod admin_workflows;
 pub mod board;
+pub mod bulk;
 pub mod create;
 pub mod dashboards;
 pub mod filters;

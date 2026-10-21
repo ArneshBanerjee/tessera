@@ -344,7 +344,99 @@ pub async fn by_id_or_key(db: &SqlitePool, id_or_key: &str) -> sqlx::Result<Opti
             .await?
         }
     };
-    Ok(issue)
+    if issue.is_some() || id_or_key.parse::<i64>().is_ok() {
+        return Ok(issue);
+    }
+    // A key the issue had before it moved to another project still finds it.
+    let moved: Option<i64> = sqlx::query_scalar(
+        "SELECT issue_id FROM moved_issue_keys WHERE old_key = ? COLLATE NOCASE",
+    )
+    .bind(id_or_key)
+    .fetch_optional(db)
+    .await?;
+    match moved {
+        Some(id) => by_id(db, id).await,
+        None => Ok(None),
+    }
+}
+
+/// Where a moved issue goes.
+pub struct Relocation {
+    pub project_id: i64,
+    pub issue_type_id: i64,
+    pub status_id: i64,
+    pub security_level_id: Option<i64>,
+}
+
+/// Moves an issue to another project: it gets the project's next key, its old key keeps
+/// finding it, and it leaves the old project's components, versions, and open sprints.
+/// `changes` go in its history, with the change of key. Returns the new key.
+pub async fn relocate(
+    db: &SqlitePool,
+    issue: &Issue,
+    author_id: i64,
+    to: &Relocation,
+    changes: &[ChangeItem],
+) -> sqlx::Result<String> {
+    let mut tx = db.begin().await?;
+    let mut key = issue.key.clone();
+    let mut changes = changes.to_vec();
+    if to.project_id != issue.project_id {
+        let (number, project_key): (i64, String) = sqlx::query_as(
+            "UPDATE projects SET issue_counter = issue_counter + 1 WHERE id = ? RETURNING issue_counter, key",
+        )
+        .bind(to.project_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        key = format!("{project_key}-{number}");
+        sqlx::query("INSERT OR REPLACE INTO moved_issue_keys (old_key, issue_id) VALUES (?, ?)")
+            .bind(&issue.key)
+            .bind(issue.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE issues SET project_id = ?, number = ?, key = ? WHERE id = ?")
+            .bind(to.project_id)
+            .bind(number)
+            .bind(&key)
+            .bind(issue.id)
+            .execute(&mut *tx)
+            .await?;
+        for table in ["issue_components", "issue_versions"] {
+            // Safe: the table names are fixed above.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE issue_id = ?"
+            )))
+            .bind(issue.id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        set_open_sprint(&mut tx, issue.id, None).await?;
+        changes.push(ChangeItem {
+            field: "Key".into(),
+            field_id: "issuekey".into(),
+            field_type: "jira".into(),
+            from_value: None,
+            from_string: Some(issue.key.clone()),
+            to_value: None,
+            to_string: Some(key.clone()),
+        });
+    }
+    sqlx::query(
+        "UPDATE issues SET issue_type_id = ?, status_id = ?, security_level_id = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(to.issue_type_id)
+    .bind(to.status_id)
+    .bind(to.security_level_id)
+    .bind(now_ms())
+    .bind(issue.id)
+    .execute(&mut *tx)
+    .await?;
+    if !changes.is_empty() {
+        crate::store::changelog::record(&mut tx, issue.id, author_id, now_ms(), &changes).await?;
+    }
+    tx.commit().await?;
+    Ok(key)
 }
 
 pub async fn by_id(db: &SqlitePool, id: i64) -> sqlx::Result<Option<Issue>> {

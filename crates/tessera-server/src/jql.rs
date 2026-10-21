@@ -898,8 +898,13 @@ impl<'a> Compiler<'a> {
                 self.binds.push(Bind::Int(id));
                 matches.push("i.id = ?".to_string());
             } else if split_key(value).is_some() {
+                // A key an issue had before it moved to another project still finds it.
                 self.binds.push(Bind::Text(value.to_string()));
-                matches.push("i.key = ? COLLATE NOCASE".to_string());
+                self.binds.push(Bind::Text(value.to_string()));
+                matches.push(
+                    "(i.key = ? COLLATE NOCASE OR i.id IN (SELECT issue_id FROM moved_issue_keys WHERE old_key = ? COLLATE NOCASE))"
+                        .to_string(),
+                );
             } else {
                 return Err(invalid_key(value, name));
             }

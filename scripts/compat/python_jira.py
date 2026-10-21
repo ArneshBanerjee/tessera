@@ -159,6 +159,14 @@ check("issue security", jira.issue(secured.key).fields.security.name == "Compat 
 check("level in JQL", [i.key for i in jira.search_issues('level = "Compat staff"')] == [secured.key])
 secured.delete()
 
+made = jira.create_issues([
+    {"project": {"key": "COMPAT"}, "summary": "Bulk one", "issuetype": {"name": "Task"}},
+    {"project": {"key": "COMPAT"}, "summary": "Bulk two", "issuetype": {"name": "Task"}},
+])
+check("bulk create", [m["status"] for m in made] == ["Success", "Success"])
+for m in made:
+    m["issue"].delete()
+
 check("system dashboard", [d.id for d in jira.dashboards()] == ["10000"])
 board = jira.create_dashboard("Compat dashboard", description="From the client")
 check("dashboard created", jira.dashboard(board.id).name == "Compat dashboard")

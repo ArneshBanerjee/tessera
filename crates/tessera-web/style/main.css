@@ -490,3 +490,10 @@ textarea.input { resize: vertical; }
 .mention-menu { position: absolute; z-index: 30; left: 8px; top: 100%; margin: 2px 0 0; padding: 4px; list-style: none; min-width: 220px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-raised); }
 .mention-option { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .mention-option.active, .mention-option:hover { background: var(--surface-sunken); }
+
+/* Bulk change */
+.bulk-bar { display: flex; gap: 10px; align-items: center; padding: 8px 12px; margin-bottom: 8px; background: var(--primary-soft); border: 1px solid var(--primary); border-radius: var(--radius); }
+.check-cell { width: 32px; }
+.check-row { flex-direction: row !important; align-items: center; gap: 8px !important; font-weight: 500; }
+.transition-group { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.bulk-change .tabs { flex-wrap: wrap; }
