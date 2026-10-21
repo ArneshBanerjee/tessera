@@ -4,6 +4,7 @@
 mod api;
 mod app;
 mod components;
+mod editor;
 mod model;
 mod pages;
 

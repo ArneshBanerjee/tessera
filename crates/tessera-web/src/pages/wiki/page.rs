@@ -8,10 +8,11 @@ use serde_json::{Value, json};
 
 use super::inline::CommentedBody;
 use super::restrictions::RestrictionsButton;
-use super::{adf_body, collection, content_path, kind_of_path, use_space};
+use super::{collection, content_path, kind_of_path, use_space};
 use crate::api;
 use crate::app::use_session;
-use crate::components::{Avatar, ErrorText, MarkdownArea};
+use crate::components::{Avatar, ErrorText};
+use crate::editor::RichEditor;
 use crate::model::{WikiCollection, WikiContent, WikiVersion, short_time};
 
 /// What the page view asks the v1 API to include.
@@ -475,16 +476,20 @@ fn CommentItem(comment: WikiContent, depth: usize, page: String) -> impl IntoVie
 #[component]
 fn CommentBox(page: String, reply_to: Option<String>) -> impl IntoView {
     let session = use_session();
-    let draft = RwSignal::new(String::new());
+    let draft = RwSignal::new(tessera_adf::Node::doc(Vec::new()));
+    let generation = RwSignal::new(0u32);
     let error = RwSignal::new(None::<String>);
     let target = StoredValue::new((page, reply_to));
     let save = move |_| {
-        let text = draft.get();
-        if text.trim().is_empty() {
+        let doc = draft.get();
+        if tessera_adf::to_plain_text(&doc).trim().is_empty()
+            && tessera_adf::mentions(&doc).is_empty()
+        {
             return;
         }
         let (page, reply_to) = target.get_value();
-        let mut body = json!({ "body": adf_body(&text) });
+        let value = serde_json::to_string(&doc).unwrap_or_default();
+        let mut body = json!({ "body": { "representation": "atlas_doc_format", "value": value } });
         match reply_to {
             Some(parent) => body["parentCommentId"] = json!(parent),
             None => body["pageId"] = json!(page),
@@ -492,7 +497,8 @@ fn CommentBox(page: String, reply_to: Option<String>) -> impl IntoView {
         spawn_local(async move {
             match api::post::<Value>(&format!("{}/footer-comments", api::WIKI2), &body).await {
                 Ok(_) => {
-                    draft.set(String::new());
+                    draft.set(tessera_adf::Node::doc(Vec::new()));
+                    generation.update(|g| *g += 1);
                     error.set(None);
                     session.changed();
                 }
@@ -504,7 +510,14 @@ fn CommentBox(page: String, reply_to: Option<String>) -> impl IntoView {
         <div class="add-comment">
             <Avatar user=Some(session.me.get_value()) size=32/>
             <div class="grow">
-                <MarkdownArea value=draft rows=3 placeholder="Add a comment… Markdown works, and @ mentions someone."/>
+                {move || {
+                    generation.track();
+                    view! {
+                        <RichEditor initial=draft.get_untracked() compact=true label="Comment"
+                            placeholder="Add a comment… Type @ to mention someone."
+                            on_change=Callback::new(move |doc| draft.set(doc))/>
+                    }
+                }}
                 <ErrorText error=error/>
                 <button class="button primary" on:click=save>"Save"</button>
             </div>

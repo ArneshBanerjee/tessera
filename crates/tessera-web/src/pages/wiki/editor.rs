@@ -1,15 +1,18 @@
-//! The editor, for new pages, blog posts, and edits. Content is written in Markdown and saved
-//! as ADF; the server keeps it in Confluence's storage format.
+//! The editor, for new pages, blog posts, and edits. Content is written in the rich-text editor,
+//! or in Markdown if you prefer, and saved as ADF; the server keeps it in Confluence's storage
+//! format.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::{use_location, use_navigate, use_params_map, use_query_map};
 use serde_json::{Value, json};
 
-use super::{adf_body, collection, content_path, kind_of_path, use_space};
+use super::{collection, content_path, kind_of_path, use_space};
 use crate::api;
 use crate::app::use_session;
 use crate::components::{ErrorText, MarkdownArea, autofocus};
+use crate::editor::RichEditor;
+use tessera_adf::Node;
 
 /// `/wiki/spaces/:key/create?parent=ID`: a new page under `parent`, or under the home page.
 #[component]
@@ -34,12 +37,16 @@ pub fn EditPage() -> impl IntoView {
     view! { <Editor id=id parent=None kind=kind/> }
 }
 
-/// The page as the editor loads it: title, Markdown, and the version it was read at.
+/// The page as the editor loads it: title, document, and the version it was read at.
 #[derive(Clone)]
 struct Draft {
     title: String,
-    markdown: String,
+    doc: Node,
     version: i64,
+}
+
+fn empty_doc() -> Node {
+    Node::doc(Vec::new())
 }
 
 async fn load(id: &str, kind: &str) -> api::ApiResult<Draft> {
@@ -52,12 +59,9 @@ async fn load(id: &str, kind: &str) -> api::ApiResult<Draft> {
     let adf = page["body"]["atlas_doc_format"]["value"]
         .as_str()
         .unwrap_or_default();
-    let markdown = serde_json::from_str::<tessera_adf::Node>(adf)
-        .map(|doc| tessera_adf::to_markdown(&doc))
-        .unwrap_or_default();
     Ok(Draft {
         title: page["title"].as_str().unwrap_or_default().to_string(),
-        markdown,
+        doc: serde_json::from_str(adf).unwrap_or_else(|_| empty_doc()),
         version: page["version"]["number"].as_i64().unwrap_or(1),
     })
 }
@@ -68,7 +72,13 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
     let space = use_space();
     let navigate = use_navigate();
     let title = RwSignal::new(String::new());
+    // The document, in the rich editor; or its Markdown, when editing in Markdown.
+    let doc = RwSignal::new(empty_doc());
     let markdown = RwSignal::new(String::new());
+    let rich = RwSignal::new(true);
+    // Bumped when the document is replaced, so the rich editor draws it afresh.
+    let generation = RwSignal::new(0u32);
+    let ready = RwSignal::new(id.is_none());
     let version = RwSignal::new(0i64);
     let error = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
@@ -82,8 +92,10 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
             match load(&id, kind).await {
                 Ok(draft) => {
                     title.set(draft.title);
-                    markdown.set(draft.markdown);
+                    doc.set(draft.doc);
                     version.set(draft.version);
+                    generation.update(|g| *g += 1);
+                    ready.set(true);
                 }
                 Err(e) => error.set(Some(e.message)),
             }
@@ -110,7 +122,15 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
         let navigate = navigate.clone();
         let parent = parent.clone();
         spawn_local(async move {
-            let body = adf_body(&markdown.get_untracked());
+            let current = if rich.get_untracked() {
+                doc.get_untracked()
+            } else {
+                tessera_adf::from_markdown(&markdown.get_untracked())
+            };
+            let body = json!({
+                "representation": "atlas_doc_format",
+                "value": serde_json::to_string(&current).unwrap_or_default(),
+            });
             let result = match editing.get_value() {
                 Some(id) => {
                     let update = json!({
@@ -168,10 +188,22 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
         });
     };
     let starting = editing.get_value().is_none() && kind == "page";
-    let on_template = Callback::new(move |(text, labels): (String, Vec<String>)| {
-        markdown.set(text);
+    let on_template = Callback::new(move |(picked, labels): (Node, Vec<String>)| {
+        markdown.set(tessera_adf::to_markdown(&picked));
+        doc.set(picked);
+        generation.update(|g| *g += 1);
         template_labels.set(labels);
     });
+    let switch_mode = move |_| {
+        if rich.get_untracked() {
+            markdown.set(tessera_adf::to_markdown(&doc.get_untracked()));
+            rich.set(false);
+        } else {
+            doc.set(tessera_adf::from_markdown(&markdown.get_untracked()));
+            generation.update(|g| *g += 1);
+            rich.set(true);
+        }
+    };
     view! {
         <div class="page wiki-page editor-page">
             {starting.then(|| view! { <TemplatePicker on_pick=on_template/> })}
@@ -179,9 +211,30 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
                 placeholder=if kind == "blogpost" { "Give this blog post a title" } else { "Give this page a title" }
                 prop:value=move || title.get()
                 on:input:target=move |ev| title.set(ev.target().value())/>
-            <MarkdownArea value=markdown rows=24 class="input editor wiki-editor"
-                placeholder="Write in Markdown: # headings, **bold**, *italic*, lists, tables, - [ ] tasks, `code`, ``` code blocks ```, > quotes, ![alt](file.png) for an attached image, and @ to mention someone."/>
-            <p class="muted small">"Panels, status lozenges, and other macros are kept as their text when you edit in Markdown."</p>
+            <div class="editor-mode">
+                <button class="link-button small" on:click=switch_mode>
+                    {move || if rich.get() { "Edit in Markdown" } else { "Back to the rich editor" }}
+                </button>
+            </div>
+            {move || {
+                generation.track();
+                if !ready.get() {
+                    return view! { <p class="muted">"Loading…"</p> }.into_any();
+                }
+                if rich.get() {
+                    view! {
+                        <RichEditor initial=doc.get_untracked() label="Page content"
+                            placeholder="Write here. Type @ to mention someone."
+                            on_change=Callback::new(move |d| doc.set(d))/>
+                    }.into_any()
+                } else {
+                    view! {
+                        <MarkdownArea value=markdown rows=24 class="input editor wiki-editor"
+                            placeholder="Write in Markdown: # headings, **bold**, *italic*, lists, tables, - [ ] tasks, `code`, ``` code blocks ```, > quotes, ![alt](file.png) for an attached image, and @ to mention someone."/>
+                        <p class="muted small">"Panels, status lozenges, inline comment marks, and other macros are kept as their text when you edit in Markdown. The rich editor keeps them."</p>
+                    }.into_any()
+                }
+            }}
             <ErrorText error=error/>
             <div class="form-actions">
                 <button class="button subtle" on:click=cancel>"Cancel"</button>
@@ -193,8 +246,8 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
     }
 }
 
-/// Loads a template's body as Markdown, with the labels it gives pages.
-async fn load_template(id: &str) -> api::ApiResult<(String, Vec<String>)> {
+/// Loads a template's body as a document, with the labels it gives pages.
+async fn load_template(id: &str) -> api::ApiResult<(Node, Vec<String>)> {
     let template: Value = api::get(&format!("{}/template/{id}", api::WIKI)).await?;
     let storage = template["body"]["storage"]["value"]
         .as_str()
@@ -204,23 +257,22 @@ async fn load_template(id: &str) -> api::ApiResult<(String, Vec<String>)> {
         &json!({ "value": storage, "representation": "storage" }),
     )
     .await?;
-    let markdown = converted["value"]
+    let picked = converted["value"]
         .as_str()
-        .and_then(|adf| serde_json::from_str::<tessera_adf::Node>(adf).ok())
-        .map(|doc| tessera_adf::to_markdown(&doc))
-        .unwrap_or_default();
+        .and_then(|adf| serde_json::from_str::<Node>(adf).ok())
+        .unwrap_or_else(empty_doc);
     let labels = template["labels"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|l| l["name"].as_str().map(str::to_string))
         .collect();
-    Ok((markdown, labels))
+    Ok((picked, labels))
 }
 
 /// Starts a new page from a template: the space's own, global ones, or Tessera's blueprints.
 #[component]
-fn TemplatePicker(on_pick: Callback<(String, Vec<String>)>) -> impl IntoView {
+fn TemplatePicker(on_pick: Callback<(Node, Vec<String>)>) -> impl IntoView {
     let space = use_space();
     let error = RwSignal::new(None::<String>);
     let groups = LocalResource::new(move || {
@@ -256,7 +308,7 @@ fn TemplatePicker(on_pick: Callback<(String, Vec<String>)>) -> impl IntoView {
     });
     let pick = move |id: String| {
         if id.is_empty() {
-            on_pick.run((String::new(), Vec::new()));
+            on_pick.run((empty_doc(), Vec::new()));
             return;
         }
         spawn_local(async move {

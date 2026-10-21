@@ -6,6 +6,7 @@
 //!
 //! [`Node`] keeps every attribute it does not know about, so documents round-trip without loss.
 
+pub mod editor;
 #[cfg(feature = "html")]
 pub mod html;
 pub mod markdown;
@@ -61,7 +62,7 @@ pub struct Mark {
 }
 
 impl Node {
-    fn new(kind: &str) -> Self {
+    pub fn new(kind: &str) -> Self {
         Self {
             kind: kind.into(),
             version: None,

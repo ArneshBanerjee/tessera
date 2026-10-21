@@ -15,6 +15,6 @@ gloo-net = { version = "0.7.0", features = ["http", "json"] }
 form_urlencoded.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-web-sys = { version = "0.3.106", features = ["DataTransfer", "Document", "DomRect", "DomTokenList", "DragEvent", "Element", "File", "FileList", "FormData", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "KeyboardEvent", "Location", "Node", "NodeList", "Range", "Selection", "Storage", "Window"] }
+web-sys = { version = "0.3.106", features = ["ClipboardEvent", "DataTransfer", "Document", "DomRect", "DomTokenList", "DragEvent", "Element", "File", "FileList", "FormData", "HtmlDocument", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "KeyboardEvent", "Location", "Node", "NodeList", "Range", "Selection", "Storage", "Text", "Window"] }
 wasm-bindgen = "0.2.129"
 js-sys = "0.3.106"

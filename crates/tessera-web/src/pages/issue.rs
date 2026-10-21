@@ -10,9 +10,9 @@ use super::{AgileFields, agile_fields};
 use crate::api;
 use crate::app::use_session;
 use crate::components::{
-    Avatar, ErrorText, Lozenge, MarkdownArea, TypeIcon, UserSelect, autofocus, render_adf,
-    users_resource,
+    Avatar, ErrorText, Lozenge, TypeIcon, UserSelect, autofocus, render_adf, users_resource,
 };
+use crate::editor::RichEditor;
 use crate::model::{Comment, Issue, IssueRef, LinkType, Named, Transition, User, short_time};
 
 /// Saves fields of an issue, then tells open views to reload.
@@ -242,21 +242,25 @@ fn DeleteButton(key: String, project: String) -> impl IntoView {
     }
 }
 
-/// The description, rendered; editing uses Markdown.
+/// Whether a document has nothing in it.
+fn is_blank(doc: &tessera_adf::Node) -> bool {
+    tessera_adf::to_plain_text(doc).trim().is_empty() && tessera_adf::mentions(doc).is_empty()
+}
+
+/// The description, rendered; click it to edit in the rich editor.
 #[component]
 fn Description(key: String, description: Value, error: RwSignal<Option<String>>) -> impl IntoView {
     let editing = RwSignal::new(false);
-    let markdown = serde_json::from_value::<tessera_adf::Node>(description.clone())
-        .map(|doc| tessera_adf::to_markdown(&doc))
-        .unwrap_or_default();
-    let draft = RwSignal::new(markdown);
+    let start = serde_json::from_value::<tessera_adf::Node>(description.clone())
+        .unwrap_or_else(|_| tessera_adf::Node::doc(Vec::new()));
+    let draft = RwSignal::new(start);
     let save = move |_| {
         editing.set(false);
-        let text = draft.get();
-        let value = if text.trim().is_empty() {
+        let doc = draft.get();
+        let value = if is_blank(&doc) {
             Value::Null
         } else {
-            serde_json::to_value(tessera_adf::from_markdown(&text)).unwrap_or(Value::Null)
+            serde_json::to_value(doc).unwrap_or(Value::Null)
         };
         save_fields(key.clone(), json!({ "description": value }), error);
     };
@@ -264,8 +268,9 @@ fn Description(key: String, description: Value, error: RwSignal<Option<String>>)
     view! {
         <Show when=move || editing.get()
             fallback=move || view! { <div class="editable" title="Click to edit" on:click=move |_| editing.set(true)>{render_adf(&shown.get_value())}</div> }>
-            <MarkdownArea value=draft rows=10 class="input editor" autofocus=true
-                placeholder="Describe the work. Markdown works: **bold**, *italic*, lists, `code`, and @ to mention someone."/>
+            <RichEditor initial=draft.get_untracked() autofocus=true label="Description"
+                placeholder="Describe the work. Type @ to mention someone."
+                on_change=Callback::new(move |doc| draft.set(doc))/>
             <div class="form-actions">
                 <button class="button primary" on:click=save.clone()>"Save"</button>
                 <button class="button subtle" on:click=move |_| editing.set(false)>"Cancel"</button>
@@ -614,20 +619,23 @@ fn Activity(key: String, comments: Vec<Comment>) -> impl IntoView {
 #[component]
 fn AddComment(key: String) -> impl IntoView {
     let session = use_session();
-    let draft = RwSignal::new(String::new());
+    let draft = RwSignal::new(tessera_adf::Node::doc(Vec::new()));
+    // Bumped after posting, so the editor starts empty again.
+    let generation = RwSignal::new(0u32);
     let error = RwSignal::new(None::<String>);
     let submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        let text = draft.get();
-        if text.trim().is_empty() {
+        let doc = draft.get();
+        if is_blank(&doc) {
             return;
         }
-        let body = json!({ "body": tessera_adf::from_markdown(&text) });
+        let body = json!({ "body": doc });
         let key = key.clone();
         spawn_local(async move {
             match api::post::<Value>(&format!("{}/issue/{key}/comment", api::CORE), &body).await {
                 Ok(_) => {
-                    draft.set(String::new());
+                    draft.set(tessera_adf::Node::doc(Vec::new()));
+                    generation.update(|g| *g += 1);
                     session.changed();
                 }
                 Err(e) => error.set(Some(e.message)),
@@ -638,7 +646,14 @@ fn AddComment(key: String) -> impl IntoView {
         <form class="add-comment" on:submit=submit>
             <Avatar user=Some(session.me.get_value()) size=32/>
             <div class="grow">
-                <MarkdownArea value=draft rows=3 placeholder="Add a comment… Type @ to mention someone."/>
+                {move || {
+                    generation.track();
+                    view! {
+                        <RichEditor initial=draft.get_untracked() compact=true label="Comment"
+                            placeholder="Add a comment… Type @ to mention someone."
+                            on_change=Callback::new(move |doc| draft.set(doc))/>
+                    }
+                }}
                 <ErrorText error=error/>
                 <button class="button primary" type="submit">"Save"</button>
             </div>
@@ -653,12 +668,32 @@ fn CommentItem(key: String, comment: Comment) -> impl IntoView {
         .author
         .as_ref()
         .is_some_and(|a| a.account_id == session.me.get_value().account_id);
-    let id = comment.id.clone();
+    let paths = StoredValue::new(format!("{}/issue/{key}/comment/{}", api::CORE, comment.id));
+    let editing = RwSignal::new(false);
+    let draft = RwSignal::new(
+        serde_json::from_value::<tessera_adf::Node>(comment.body.clone())
+            .unwrap_or_else(|_| tessera_adf::Node::doc(Vec::new())),
+    );
+    let error = RwSignal::new(None::<String>);
     let delete = move |_| {
-        let path = format!("{}/issue/{key}/comment/{id}", api::CORE);
         spawn_local(async move {
-            if api::delete(&path).await.is_ok() {
+            if api::delete(&paths.get_value()).await.is_ok() {
                 session.changed();
+            }
+        });
+    };
+    let save = move |_| {
+        let doc = draft.get();
+        if is_blank(&doc) {
+            return;
+        }
+        spawn_local(async move {
+            match api::put::<Value>(&paths.get_value(), &json!({ "body": doc })).await {
+                Ok(_) => {
+                    editing.set(false);
+                    session.changed();
+                }
+                Err(e) => error.set(Some(e.message)),
             }
         });
     };
@@ -667,14 +702,24 @@ fn CommentItem(key: String, comment: Comment) -> impl IntoView {
         .as_ref()
         .map(|a| a.display_name.clone())
         .unwrap_or_default();
+    let body = StoredValue::new(comment.body.clone());
     view! {
         <li class="comment">
             <Avatar user=comment.author.clone() size=32/>
             <div class="grow">
                 <strong>{name}</strong> <span class="muted small">{short_time(&comment.created)}</span>
-                {render_adf(&comment.body)}
-                <Show when=move || mine>
-                    <button class="button subtle small" on:click=delete.clone()>"Delete"</button>
+                <Show when=move || editing.get() fallback=move || render_adf(&body.get_value())>
+                    <RichEditor initial=draft.get_untracked() compact=true autofocus=true label="Comment"
+                        on_change=Callback::new(move |doc| draft.set(doc))/>
+                    <ErrorText error=error/>
+                    <div class="form-actions">
+                        <button class="button primary small" on:click=save>"Save"</button>
+                        <button class="button subtle small" on:click=move |_| editing.set(false)>"Cancel"</button>
+                    </div>
+                </Show>
+                <Show when=move || mine && !editing.get()>
+                    <button class="button subtle small" on:click=move |_| editing.set(true)>"Edit"</button>
+                    <button class="button subtle small" on:click=delete>"Delete"</button>
                 </Show>
             </div>
         </li>

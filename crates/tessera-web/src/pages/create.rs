@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 
 use crate::api;
 use crate::app::use_session;
-use crate::components::{ErrorText, MarkdownArea, Modal, UserSelect, users_resource};
+use crate::components::{ErrorText, Modal, UserSelect, users_resource};
+use crate::editor::RichEditor;
 use crate::model::{Named, Project};
 
 #[component]
@@ -35,7 +36,9 @@ pub fn CreateIssue() -> impl IntoView {
     let project = RwSignal::new(String::new());
     let issue_type = RwSignal::new("Task".to_string());
     let summary = RwSignal::new(String::new());
-    let description = RwSignal::new(String::new());
+    let description = RwSignal::new(tessera_adf::Node::doc(Vec::new()));
+    // Bumped when the form clears, so the editor starts empty again.
+    let generation = RwSignal::new(0u32);
     let assignee = RwSignal::new(None::<String>);
     let priority = RwSignal::new("Medium".to_string());
     let labels = RwSignal::new(String::new());
@@ -61,10 +64,11 @@ pub fn CreateIssue() -> impl IntoView {
             "priority": { "name": priority.get() },
             "labels": labels.get().split_whitespace().collect::<Vec<_>>(),
         });
-        let text = description.get();
-        if !text.trim().is_empty() {
-            fields["description"] =
-                serde_json::to_value(tessera_adf::from_markdown(&text)).unwrap_or(Value::Null);
+        let doc = description.get();
+        if !tessera_adf::to_plain_text(&doc).trim().is_empty()
+            || !tessera_adf::mentions(&doc).is_empty()
+        {
+            fields["description"] = serde_json::to_value(doc).unwrap_or(Value::Null);
         }
         if let Some(id) = assignee.get() {
             fields["assignee"] = json!({ "accountId": id });
@@ -83,7 +87,8 @@ pub fn CreateIssue() -> impl IntoView {
                     error.set(None);
                     if another.get_untracked() {
                         summary.set(String::new());
-                        description.set(String::new());
+                        description.set(tessera_adf::Node::doc(Vec::new()));
+                        generation.update(|g| *g += 1);
                         created.set(Some(key));
                     } else {
                         session.creating.set(false);
@@ -123,7 +128,14 @@ pub fn CreateIssue() -> impl IntoView {
                         on:input:target=move |ev| summary.set(ev.target().value())/>
                 </label>
                 <label>"Description"
-                    <MarkdownArea value=description rows=6 placeholder="Markdown works: **bold**, *italic*, lists, `code`, and @ to mention someone."/>
+                    {move || {
+                        generation.track();
+                        view! {
+                            <RichEditor initial=description.get_untracked() compact=true label="Description"
+                                placeholder="Describe the work. Type @ to mention someone."
+                                on_change=Callback::new(move |doc| description.set(doc))/>
+                        }
+                    }}
                 </label>
                 <div class="form-row">
                     <label>"Assignee"

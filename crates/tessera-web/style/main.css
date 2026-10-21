@@ -531,3 +531,30 @@ textarea.input { resize: vertical; }
 .inline-author { display: flex; gap: 6px; align-items: center; }
 .inline-actions { display: flex; gap: 12px; }
 .wiki-body .inline-comment-marker.resolved { background: none; border-bottom: 0; cursor: text; }
+
+/* Rich-text editor */
+.rich-editor-frame { position: relative; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.rich-editor-frame:focus-within { border-color: var(--focus); box-shadow: 0 0 0 2px var(--primary-soft); }
+.rich-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border); background: var(--surface-sunken); border-radius: var(--radius) var(--radius) 0 0; position: sticky; top: 52px; z-index: 5; }
+.rich-button { min-width: 28px; height: 28px; border: 0; background: none; border-radius: var(--radius); cursor: pointer; font: inherit; color: var(--text); padding: 0 6px; }
+.rich-button:hover { background: var(--border); }
+.rich-block { width: auto; height: 28px; padding: 0 6px; font-size: 13px; }
+.rich-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.rich-editor { min-height: 360px; padding: 14px 16px; outline: none; }
+.rich-editor-frame.compact .rich-editor { min-height: 80px; padding: 8px 10px; }
+.rich-editor:empty::before, .rich-editor > p:only-child:has(> br:only-child)::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
+.rich-editor .editor-locked { display: block; padding: 6px 10px; margin: 6px 0; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--surface-sunken); color: var(--muted); font-size: 13px; user-select: none; }
+.rich-editor span.editor-locked { display: inline-block; padding: 0 6px; margin: 0 2px; }
+.rich-editor .editor-panel { padding: 8px 12px; margin: 8px 0; border-radius: var(--radius); border-left: 4px solid #2a78d6; background: #e9f2fc; }
+.rich-editor .editor-panel.panel-note { border-color: #8f5bd6; background: #f2ecfb; }
+.rich-editor .editor-panel.panel-warning { border-color: #d4a017; background: #fdf5e0; }
+.rich-editor .editor-panel.panel-success { border-color: #1a9e77; background: #e6f6f0; }
+.rich-editor .editor-panel.panel-error { border-color: #c2372b; background: #fbeae8; }
+.rich-editor ul[data-task-list] { list-style: none; padding-left: 4px; }
+.rich-editor ul[data-task-list] input { margin-right: 6px; }
+.rich-editor .mention { background: var(--primary-soft); color: var(--primary-strong); border-radius: 10px; padding: 0 6px; }
+.rich-editor .annotation { background: #fdf0c2; border-bottom: 2px solid #e2b93b; }
+.rich-editor table { border-collapse: collapse; }
+.rich-editor th, .rich-editor td { border: 1px solid var(--border); min-width: 80px; padding: 4px 8px; }
+.rich-editor-frame .mention-menu { position: absolute; }
+.editor-mode { display: flex; justify-content: flex-end; margin-bottom: 4px; }
