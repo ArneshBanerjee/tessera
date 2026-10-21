@@ -16,6 +16,7 @@ pub mod issues;
 pub mod labels;
 pub mod links;
 pub mod meta;
+pub mod notifications;
 pub mod outbox;
 pub mod permissions;
 pub mod projects;

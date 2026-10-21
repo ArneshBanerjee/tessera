@@ -163,6 +163,25 @@ impl Node {
     }
 }
 
+/// The account ids a document mentions, each once, in order of appearance.
+pub fn mentions(node: &Node) -> Vec<String> {
+    fn walk(node: &Node, out: &mut Vec<String>) {
+        if node.kind == "mention"
+            && let Some(id) = node.attr("id")
+            && !id.is_empty()
+            && !out.iter().any(|seen| seen == id)
+        {
+            out.push(id.to_string());
+        }
+        for child in &node.content {
+            walk(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(node, &mut out);
+    out
+}
+
 /// Converts plain text to an ADF document, the way the v2 API stores a plain string.
 ///
 /// Blank lines separate paragraphs. Single newlines become hard breaks inside a paragraph.

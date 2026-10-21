@@ -1,6 +1,6 @@
 //! Issues: create, read, edit, delete, assign, history, and the create and edit metadata.
 
-use crate::api::access::Access;
+use crate::api::access::{Access, IssuePeople};
 use crate::api::access::{find_issue_access, find_issue_as, viewer_can_see};
 use crate::notify::{self, IssueEvent};
 use std::collections::BTreeMap;
@@ -627,7 +627,12 @@ pub async fn create(
     if let Some(parent) = &parent {
         fields.security_level_id = parent.security_level_id;
     } else if request.fields.contains_key("security") {
-        check_security(&state.db, &access, None, fields.security_level_id).await?;
+        // The new issue's reporter and assignee count, as in Jira.
+        let people = IssuePeople {
+            reporter: fields.reporter_id,
+            assignee: fields.assignee_id,
+        };
+        check_security(&state.db, &access, None, people, fields.security_level_id).await?;
     } else if let Some(scheme) = security::project_scheme(&state.db, project.id).await? {
         fields.security_level_id = security::scheme(&state.db, scheme)
             .await?
@@ -648,7 +653,8 @@ pub async fn create(
     for body in &new_comments {
         comments::create(&state.db, issue.id, user.id, body).await?;
     }
-    notify::issue(&state, &user, &issue, IssueEvent::Created).await;
+    let mentioned = notify::new_mentions(issue.description.as_deref(), None);
+    notify::issue_with_mentions(&state, &user, &issue, IssueEvent::Created, &mentioned).await;
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -665,6 +671,7 @@ async fn check_security(
     db: &SqlitePool,
     access: &Access,
     issue: Option<&Issue>,
+    people: IssuePeople,
     level: Option<i64>,
 ) -> ApiResult<()> {
     if !access.can_on("SET_ISSUE_SECURITY", issue) {
@@ -674,7 +681,7 @@ async fn check_security(
         ));
     }
     if let Some(level) = level
-        && !access.in_level(level, issue)
+        && !access.in_level_with(level, Some(people))
     {
         let name = security::level(db, level)
             .await?
@@ -730,7 +737,11 @@ pub async fn save_edit(
             .await?
             .ok_or_else(ApiError::issue_not_found)?;
         let access = Access::load(&db, &author, &project).await?;
-        check_security(&db, &access, Some(issue), after.security_level_id).await?;
+        let people = IssuePeople {
+            reporter: after.reporter_id,
+            assignee: after.assignee_id,
+        };
+        check_security(&db, &access, Some(issue), people, after.security_level_id).await?;
     }
     // A new issue type may follow another workflow, which must have the issue's status.
     if after.issue_type_id != before.issue_type_id {
@@ -780,7 +791,11 @@ pub async fn edit(
         } else {
             IssueEvent::Updated(&changed)
         };
-        notify::issue(&state, &user, &reload(&state, &issue).await?, event).await;
+        let now = reload(&state, &issue).await?;
+        // People newly mentioned in the description hear about the mention.
+        let mentioned =
+            notify::new_mentions(now.description.as_deref(), issue.description.as_deref());
+        notify::issue_with_mentions(&state, &user, &now, event, &mentioned).await;
     }
     Ok(StatusCode::NO_CONTENT)
 }

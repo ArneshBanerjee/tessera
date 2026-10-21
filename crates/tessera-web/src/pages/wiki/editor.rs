@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::{adf_body, collection, content_path, kind_of_path, use_space};
 use crate::api;
 use crate::app::use_session;
-use crate::components::{ErrorText, autofocus};
+use crate::components::{ErrorText, MarkdownArea, autofocus};
 
 /// `/wiki/spaces/:key/create?parent=ID`: a new page under `parent`, or under the home page.
 #[component]
@@ -179,10 +179,8 @@ fn Editor(id: Option<String>, parent: Option<String>, kind: &'static str) -> imp
                 placeholder=if kind == "blogpost" { "Give this blog post a title" } else { "Give this page a title" }
                 prop:value=move || title.get()
                 on:input:target=move |ev| title.set(ev.target().value())/>
-            <textarea class="input editor wiki-editor" rows="24"
-                placeholder="Write in Markdown: # headings, **bold**, *italic*, lists, `code`, ``` code blocks ```, > quotes, and ![alt](file.png) for an attached image."
-                prop:value=move || markdown.get()
-                on:input:target=move |ev| markdown.set(ev.target().value())></textarea>
+            <MarkdownArea value=markdown rows=24 class="input editor wiki-editor"
+                placeholder="Write in Markdown: # headings, **bold**, *italic*, lists, tables, - [ ] tasks, `code`, ``` code blocks ```, > quotes, ![alt](file.png) for an attached image, and @ to mention someone."/>
             <p class="muted small">"Panels, status lozenges, and other macros are kept as their text when you edit in Markdown."</p>
             <ErrorText error=error/>
             <div class="form-actions">

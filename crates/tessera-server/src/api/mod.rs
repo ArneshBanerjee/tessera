@@ -16,6 +16,7 @@ mod issue_fields;
 mod issues;
 mod links;
 mod meta;
+mod notifications;
 mod parts;
 mod permissions;
 mod projects;
@@ -95,6 +96,7 @@ pub fn router() -> Router<AppState> {
                     put(dashboards::add_favourite).delete(dashboards::remove_favourite),
                 )
                 .route("/dashboard/{id}/layout", put(dashboards::set_layout))
+                .merge(notifications::router())
                 .merge(agile::reports::tessera_router())
                 .merge(agile::quick_filters::tessera_router()),
         )

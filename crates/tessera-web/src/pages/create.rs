@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::api;
 use crate::app::use_session;
-use crate::components::{ErrorText, Modal, UserSelect, users_resource};
+use crate::components::{ErrorText, MarkdownArea, Modal, UserSelect, users_resource};
 use crate::model::{Named, Project};
 
 #[component]
@@ -123,9 +123,7 @@ pub fn CreateIssue() -> impl IntoView {
                         on:input:target=move |ev| summary.set(ev.target().value())/>
                 </label>
                 <label>"Description"
-                    <textarea class="input" rows="6" placeholder="Markdown works: **bold**, *italic*, lists, `code`."
-                        prop:value=move || description.get()
-                        on:input:target=move |ev| description.set(ev.target().value())></textarea>
+                    <MarkdownArea value=description rows=6 placeholder="Markdown works: **bold**, *italic*, lists, `code`, and @ to mention someone."/>
                 </label>
                 <div class="form-row">
                     <label>"Assignee"

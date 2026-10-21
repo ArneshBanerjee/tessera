@@ -2,8 +2,9 @@
 //!
 //! Supported: paragraphs, headings, bullet and numbered lists, task lists (`- [ ]`), tables
 //! (GitHub's pipe tables), code blocks, quotes, rules, hard breaks, images, and the marks bold,
-//! italic, strikethrough, inline code, and links. Other ADF nodes (panels, mentions, status
-//! lozenges) keep their text when written as Markdown.
+//! italic, strikethrough, inline code, and links. A mention is written as a link to
+//! `mention:` and the account id, such as `[@Ana](mention:5b10ac8d)`. Other ADF nodes (panels
+//! and status lozenges) keep their text when written as Markdown.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde_json::{Map, Value, json};
@@ -125,6 +126,15 @@ pub fn from_markdown(markdown: &str) -> Node {
                     kind: "strike".into(),
                     attrs: None,
                 }),
+                // `[@Name](mention:accountId)` is a mention. Its label arrives as text events.
+                Tag::Link { dest_url, .. } if dest_url.starts_with("mention:") => {
+                    ensure_inline_parent(&mut stack);
+                    let id = dest_url.trim_start_matches("mention:").to_string();
+                    stack.push(Node {
+                        attrs: attrs(&[("id", json!(id)), ("text", json!(""))]),
+                        ..block("mention")
+                    });
+                }
                 Tag::Link { dest_url, .. } => marks.push(Mark {
                     kind: "link".into(),
                     attrs: attrs(&[("href", json!(dest_url.to_string()))]),
@@ -179,13 +189,24 @@ pub fn from_markdown(markdown: &str) -> Node {
                     close(&mut stack);
                 }
                 TagEnd::TableRow | TagEnd::Table => close(&mut stack),
+                TagEnd::Link if stack.last().is_some_and(|n| n.kind == "mention") => {
+                    close(&mut stack);
+                }
                 TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                     marks.pop();
                 }
                 _ => {}
             },
             Event::Text(text) => {
-                if let Some(image) = stack.last_mut().filter(|n| n.kind == "mediaInline") {
+                if let Some(mention) = stack.last_mut().filter(|n| n.kind == "mention") {
+                    let attrs = mention.attrs.get_or_insert_with(Map::new);
+                    let label = attrs
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let label = format!("{label}{text}");
+                    attrs.insert("text".into(), json!(label));
+                } else if let Some(image) = stack.last_mut().filter(|n| n.kind == "mediaInline") {
                     let attrs = image.attrs.get_or_insert_with(Map::new);
                     let alt = attrs.get("alt").and_then(Value::as_str).unwrap_or_default();
                     let alt = format!("{alt}{text}");
@@ -456,6 +477,22 @@ fn inline(nodes: &[Node]) -> String {
             }
             "hardBreak" => out.push('\n'),
             "mediaInline" | "media" => out.push_str(&image_markdown(node)),
+            "mention" => {
+                let attr = |name: &str| {
+                    node.attrs
+                        .as_ref()
+                        .and_then(|a| a.get(name))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let id = attr("id");
+                let mut label = attr("text");
+                if !label.starts_with('@') {
+                    label = format!("@{label}");
+                }
+                out.push_str(&format!("[{label}](mention:{id})"));
+            }
             _ => out.push_str(&crate::to_plain_text(node)),
         }
     }
@@ -542,6 +579,17 @@ mod tests {
         assert_eq!(tasks["content"][0]["type"], "taskItem");
         assert_eq!(tasks["content"][0]["attrs"]["state"], "DONE");
         assert_eq!(tasks["content"][0]["content"][0]["text"], "done");
+    }
+
+    #[test]
+    fn mentions_are_links_to_accounts() {
+        round_trip("Hi [@Ana Lima](mention:5b10ac8d), please look.");
+        let doc = from_markdown("Ask [@Ana](mention:abc) and [@Bo](mention:def).");
+        let mention = &doc.content[0].content[1];
+        assert_eq!(mention.kind, "mention");
+        assert_eq!(mention.attrs.as_ref().unwrap()["id"], "abc");
+        assert_eq!(mention.attrs.as_ref().unwrap()["text"], "@Ana");
+        assert_eq!(crate::mentions(&doc), ["abc", "def"]);
     }
 
     #[test]

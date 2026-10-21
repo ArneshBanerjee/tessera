@@ -73,7 +73,15 @@ pub async fn create(
     // Commenting makes you a watcher, as with Jira's default autowatch setting.
     social::add(&state.db, List::Watchers, issue.id, user.id).await?;
     let text = tessera_adf::to_plain_text(&body);
-    notify::issue(&state, &user, &issue, IssueEvent::Commented(&text)).await;
+    let mentioned = tessera_adf::mentions(&body);
+    notify::issue_with_mentions(
+        &state,
+        &user,
+        &issue,
+        IssueEvent::Commented(&text),
+        &mentioned,
+    )
+    .await;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok((
         StatusCode::CREATED,
@@ -107,8 +115,18 @@ pub async fn update(
         access.can_own_or_all("EDIT_OWN_COMMENTS", "EDIT_ALL_COMMENTS", own, &issue),
         "EDIT_ALL_COMMENTS",
     )?;
-    let updated =
-        comments::update(&state.db, comment.id, user.id, &parse_body(&request.body)?).await?;
+    let body = parse_body(&request.body)?;
+    let updated = comments::update(&state.db, comment.id, user.id, &body).await?;
+    // People newly mentioned in the edit hear about it.
+    let before = serde_json::from_str::<tessera_adf::Node>(&comment.body)
+        .map(|doc| tessera_adf::mentions(&doc))
+        .unwrap_or_default();
+    let mentioned: Vec<String> = tessera_adf::mentions(&body)
+        .into_iter()
+        .filter(|id| !before.contains(id))
+        .collect();
+    let text = tessera_adf::to_plain_text(&body);
+    notify::issue_mentions(&state, &user, &issue, &text, &mentioned).await;
     let mut ctx = Ctx::new(&state, version).await?;
     Ok(Json(comment_json(&mut ctx, issue.id, &updated).await?))
 }

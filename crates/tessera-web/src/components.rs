@@ -124,6 +124,150 @@ pub fn UserSelect(
     }
 }
 
+/// The `@name` being typed just before the caret: the byte offset of its `@`, and the name
+/// typed so far. `caret` counts UTF-16 units, as the browser does.
+fn mention_query(text: &str, caret: usize) -> Option<(usize, String)> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let prefix = String::from_utf16_lossy(&units[..caret.min(units.len())]);
+    let at = prefix.rfind('@')?;
+    let typed = &prefix[at + 1..];
+    let starts_word = prefix[..at]
+        .chars()
+        .last()
+        .is_none_or(|c| c.is_whitespace() || c == '(');
+    let plain = typed.chars().count() <= 30 && !typed.contains(['\n', '[', ']', '(', ')']);
+    // Names have spaces, so allow them, but not two in a row or a leading one.
+    let words_ok = !typed.starts_with(' ') && !typed.contains("  ");
+    (starts_word && plain && words_ok).then(|| (at, typed.to_string()))
+}
+
+/// A Markdown text box. Typing `@` and part of a name offers people to mention; picking one
+/// writes `[@Name](mention:accountId)`, which saves as a mention.
+#[component]
+pub fn MarkdownArea(
+    value: RwSignal<String>,
+    #[prop(default = 4)] rows: u32,
+    #[prop(into, optional)] placeholder: String,
+    #[prop(into, default = "input".to_string())] class: String,
+    #[prop(optional)] autofocus: bool,
+) -> impl IntoView {
+    let node: NodeRef<leptos::html::Textarea> = NodeRef::new();
+    if autofocus {
+        Effect::new(move |_| {
+            if let Some(element) = node.get() {
+                let _ = element.focus();
+            }
+        });
+    }
+    let users = users_resource();
+    let query = RwSignal::new(None::<(usize, String)>);
+    let active = RwSignal::new(0usize);
+    let matches = move || -> Vec<User> {
+        let Some((_, typed)) = query.get() else {
+            return Vec::new();
+        };
+        let typed = typed.to_lowercase();
+        users
+            .get()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|u| {
+                u.display_name.to_lowercase().contains(&typed)
+                    || u.email_address.to_lowercase().starts_with(&typed)
+            })
+            .take(6)
+            .collect()
+    };
+    let update_query = move || {
+        if let Some(element) = node.get_untracked() {
+            let caret = element.selection_start().ok().flatten().unwrap_or(0) as usize;
+            query.set(mention_query(&element.value(), caret));
+            active.set(0);
+        }
+    };
+    let pick = move |user: User| {
+        let (Some(element), Some((start, _))) = (node.get_untracked(), query.get_untracked())
+        else {
+            return;
+        };
+        let text = element.value();
+        let caret = element.selection_start().ok().flatten().unwrap_or(0) as usize;
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let end = String::from_utf16_lossy(&units[..caret.min(units.len())]).len();
+        let name: String = user
+            .display_name
+            .chars()
+            .filter(|c| !matches!(c, '[' | ']'))
+            .collect();
+        let token = format!("[@{name}](mention:{}) ", user.account_id);
+        let updated = format!("{}{token}{}", &text[..start], &text[end..]);
+        element.set_value(&updated);
+        value.set(updated.clone());
+        let position = (text[..start].encode_utf16().count() + token.encode_utf16().count()) as u32;
+        let _ = element.set_selection_range(position, position);
+        let _ = element.focus();
+        query.set(None);
+    };
+    let on_key = move |ev: leptos::ev::KeyboardEvent| {
+        let list = matches();
+        if list.is_empty() {
+            return;
+        }
+        match ev.key().as_str() {
+            "ArrowDown" => {
+                ev.prevent_default();
+                active.update(|a| *a = (*a + 1) % list.len());
+            }
+            "ArrowUp" => {
+                ev.prevent_default();
+                active.update(|a| *a = (*a + list.len() - 1) % list.len());
+            }
+            "Enter" | "Tab" => {
+                ev.prevent_default();
+                let chosen = list[active.get_untracked().min(list.len() - 1)].clone();
+                pick(chosen);
+            }
+            "Escape" => {
+                ev.prevent_default();
+                query.set(None);
+            }
+            _ => {}
+        }
+    };
+    view! {
+        <div class="markdown-area">
+            <textarea class=class rows=rows placeholder=placeholder node_ref=node
+                prop:value=move || value.get()
+                on:input:target=move |ev| {
+                    value.set(ev.target().value());
+                    update_query();
+                }
+                on:keydown=on_key
+                on:click=move |_| update_query()
+                on:blur=move |_| query.set(None)></textarea>
+            {move || {
+                let list = matches();
+                (!list.is_empty()).then(|| view! {
+                    <ul class="mention-menu" role="listbox" aria-label="People to mention">
+                        {list.into_iter().enumerate().map(|(i, user)| {
+                            let chosen = user.clone();
+                            view! {
+                                <li role="option" class="mention-option" class:active=move || active.get() == i
+                                    aria-selected=move || (active.get() == i).to_string()
+                                    // Mouse down, not click: the text box keeps its focus.
+                                    on:mousedown=move |ev| { ev.prevent_default(); pick(chosen.clone()); }>
+                                    <Avatar user=Some(user.clone()) size=20/>
+                                    <span>{user.display_name.clone()}</span>
+                                </li>
+                            }
+                        }).collect_view()}
+                    </ul>
+                })
+            }}
+        </div>
+    }
+}
+
 /// Renders an ADF document. Text is always inserted as text, never as HTML.
 pub fn render_adf(doc: &Value) -> AnyView {
     if doc.is_null() {

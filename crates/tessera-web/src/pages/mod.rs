@@ -7,6 +7,7 @@ pub mod board;
 pub mod create;
 pub mod dashboards;
 pub mod filters;
+pub mod inbox;
 pub mod issue;
 pub mod project_settings;
 pub mod projects;

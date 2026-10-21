@@ -10,7 +10,7 @@ use super::restrictions::RestrictionsButton;
 use super::{adf_body, collection, content_path, kind_of_path, use_space};
 use crate::api;
 use crate::app::use_session;
-use crate::components::{Avatar, ErrorText};
+use crate::components::{Avatar, ErrorText, MarkdownArea};
 use crate::model::{WikiCollection, WikiContent, WikiVersion, short_time};
 
 /// What the page view asks the v1 API to include.
@@ -504,9 +504,7 @@ fn CommentBox(page: String, reply_to: Option<String>) -> impl IntoView {
         <div class="add-comment">
             <Avatar user=Some(session.me.get_value()) size=32/>
             <div class="grow">
-                <textarea class="input" rows="3" placeholder="Add a comment… Markdown works."
-                    prop:value=move || draft.get()
-                    on:input:target=move |ev| draft.set(ev.target().value())></textarea>
+                <MarkdownArea value=draft rows=3 placeholder="Add a comment… Markdown works, and @ mentions someone."/>
                 <ErrorText error=error/>
                 <button class="button primary" on:click=save>"Save"</button>
             </div>

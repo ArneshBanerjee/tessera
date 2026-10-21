@@ -230,6 +230,22 @@ pub const HOLDER_TYPES: &[&str] = &[
     "assignee",
 ];
 
+/// The people on an issue whom grants and level members can name.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IssuePeople {
+    pub reporter: Option<i64>,
+    pub assignee: Option<i64>,
+}
+
+impl IssuePeople {
+    pub fn of(issue: &Issue) -> IssuePeople {
+        IssuePeople {
+            reporter: issue.reporter_id,
+            assignee: issue.assignee_id,
+        }
+    }
+}
+
 /// What one user may do in one project.
 pub struct Access {
     admin: bool,
@@ -281,9 +297,15 @@ impl Access {
     /// As in Jira, being a site administrator does not make anyone a member: a level's issues
     /// are seen only by the people it names.
     pub fn in_level(&self, level_id: i64, issue: Option<&Issue>) -> bool {
+        self.in_level_with(level_id, issue.map(IssuePeople::of))
+    }
+
+    /// Whether the user is a member of a level, for an issue with these people. A new issue
+    /// has a reporter and an assignee before it exists.
+    pub fn in_level_with(&self, level_id: i64, people: Option<IssuePeople>) -> bool {
         self.members.iter().any(|m| {
             m.level_id == level_id
-                && self.holds(&m.holder_type, m.holder_parameter.as_deref(), issue)
+                && self.holds(&m.holder_type, m.holder_parameter.as_deref(), people)
         })
     }
 
@@ -309,16 +331,27 @@ impl Access {
     }
 
     /// The levels the user may put an issue at: those they are a member of.
+    ///
+    /// Without an issue, the levels are for a new one, which the user reports, as in Jira.
     pub fn settable_levels(&self, issue: Option<&Issue>) -> Vec<Level> {
+        let people = issue.map(IssuePeople::of).unwrap_or(IssuePeople {
+            reporter: Some(self.user_id),
+            assignee: None,
+        });
         self.levels
             .iter()
-            .filter(|l| self.in_level(l.id, issue))
+            .filter(|l| self.in_level_with(l.id, Some(people)))
             .cloned()
             .collect()
     }
 
     /// Whether the user is the holder a grant or a level member names.
-    fn holds(&self, holder_type: &str, parameter: Option<&str>, issue: Option<&Issue>) -> bool {
+    fn holds(
+        &self,
+        holder_type: &str,
+        parameter: Option<&str>,
+        people: Option<IssuePeople>,
+    ) -> bool {
         let param = parameter.unwrap_or_default();
         match holder_type {
             "anyone" | "applicationRole" => true,
@@ -328,8 +361,8 @@ impl Access {
                 .parse()
                 .is_ok_and(|role: i64| self.roles.contains(&role)),
             "projectLead" => self.lead_id == Some(self.user_id),
-            "reporter" => issue.is_some_and(|i| i.reporter_id == Some(self.user_id)),
-            "assignee" => issue.is_some_and(|i| i.assignee_id == Some(self.user_id)),
+            "reporter" => people.is_some_and(|p| p.reporter == Some(self.user_id)),
+            "assignee" => people.is_some_and(|p| p.assignee == Some(self.user_id)),
             _ => false,
         }
     }
@@ -344,7 +377,11 @@ impl Access {
         self.admin
             || self.grants.iter().any(|g| {
                 g.permission == permission
-                    && self.holds(&g.holder_type, g.holder_parameter.as_deref(), issue)
+                    && self.holds(
+                        &g.holder_type,
+                        g.holder_parameter.as_deref(),
+                        issue.map(IssuePeople::of),
+                    )
             })
     }
 

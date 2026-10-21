@@ -123,6 +123,22 @@ pub struct View<'a> {
     pub page_id: Option<i64>,
 }
 
+/// Gives mentions their display names, which storage format leaves out.
+fn name_mentions(node: &mut tessera_adf::Node, names: &Names) {
+    if node.kind == "mention"
+        && let Some(attrs) = node.attrs.as_mut()
+        && let Some(name) = attrs
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| names.get(id))
+    {
+        attrs.insert("text".into(), Value::String(format!("@{name}")));
+    }
+    for child in &mut node.content {
+        name_mentions(child, names);
+    }
+}
+
 /// Draws a storage-format body as safe HTML: macros become plain HTML, then it is sanitized.
 pub fn view_html(storage: &str, view: &View) -> String {
     let doc = tessera_adf::html::from_storage(storage);
@@ -138,8 +154,11 @@ pub fn view_html(storage: &str, view: &View) -> String {
 pub fn body_as(representation: &str, storage: &str, view: &View) -> Option<String> {
     Some(match representation {
         "storage" | "editor" => storage.to_string(),
-        "atlas_doc_format" => serde_json::to_string(&tessera_adf::html::from_storage(storage))
-            .expect("ADF serializes"),
+        "atlas_doc_format" => {
+            let mut doc = tessera_adf::html::from_storage(storage);
+            name_mentions(&mut doc, view.names);
+            serde_json::to_string(&doc).expect("ADF serializes")
+        }
         r if is_view(r) => view_html(storage, view),
         _ => return None,
     })
@@ -318,7 +337,8 @@ pub async fn create_page(state: &AppState, user: &User, page: NewPage<'_>) -> Wi
     // You watch what you create, as with Confluence's default setting.
     wiki_watchers::watch(&state.db, Target::Content(created.id), user.id).await?;
     if created.status == "current" {
-        notify::wiki(state, user, &created, WikiEvent::Created).await;
+        let mentioned = notify::new_storage_mentions(&created.body, "");
+        notify::wiki_with_mentions(state, user, &created, WikiEvent::Created, &mentioned).await;
     }
     Ok(created)
 }
@@ -363,7 +383,15 @@ pub async fn create_comment(
     )
     .await?;
     let text = content::plain_text(body);
-    notify::wiki(state, user, container, WikiEvent::Commented(&text)).await;
+    let mentioned = notify::new_storage_mentions(body, "");
+    notify::wiki_with_mentions(
+        state,
+        user,
+        container,
+        WikiEvent::Commented(&text),
+        &mentioned,
+    )
+    .await;
     wiki_watchers::watch(&state.db, Target::Content(container.id), user.id).await?;
     Ok(comment)
 }
@@ -449,11 +477,24 @@ pub async fn save(
     )
     .await?;
     // Editors watch what they edit. Minor edits notify nobody, as in Confluence.
+    // People newly mentioned hear about it, even after a minor edit.
+    let mentioned = if updated.status == "current" {
+        notify::new_storage_mentions(&updated.body, &found.body)
+    } else {
+        Vec::new()
+    };
     if matches!(updated.content_type.as_str(), "page" | "blogpost") && updated.status == "current" {
         wiki_watchers::watch(&state.db, Target::Content(updated.id), user.id).await?;
-        if !save.minor_edit {
-            notify::wiki(state, user, &updated, WikiEvent::Updated).await;
+        if save.minor_edit {
+            notify::wiki_mentions(state, user, &updated, &mentioned).await;
+        } else {
+            notify::wiki_with_mentions(state, user, &updated, WikiEvent::Updated, &mentioned).await;
         }
+    } else if updated.content_type == "comment"
+        && let Some(container) = updated.container_id
+        && let Some(page) = content::by_id(&state.db, container).await?
+    {
+        notify::wiki_mentions(state, user, &page, &mentioned).await;
     }
     Ok(updated)
 }

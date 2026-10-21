@@ -198,3 +198,183 @@ async fn confluence_watchers_hear_about_edits_and_comments() {
     assert!(mail[0].2.contains("Dev commented on Guide"));
     assert!(mail[0].2.contains("Looks right"));
 }
+
+/// A comment body that mentions one account.
+fn mention_doc(account: &str, name: &str, text: &str) -> serde_json::Value {
+    json!({ "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [
+        { "type": "mention", "attrs": { "id": account, "text": format!("@{name}") } },
+        { "type": "text", "text": text },
+    ] }] })
+}
+
+#[tokio::test]
+async fn mentions_reach_people_and_show_in_the_app() {
+    let app = TestApp::new().await;
+    app.project("PROJ").await;
+    let (dev, dev_account) = app.user("dev@tessera.test", "Dev").await;
+    let (ops, ops_account) = app.user("ops@tessera.test", "Ops").await;
+    let key = app.issue("PROJ", "Slow search", json!({})).await;
+    clear(&app).await;
+
+    // Dev, who does not watch the issue, is mentioned in a comment.
+    let (status, comment) = app
+        .post(
+            &format!("{API}/issue/{key}/comment"),
+            json!({ "body": mention_doc(&dev_account, "Dev", " can you look?") }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mail = outbox(&app).await;
+    assert_eq!(mail.len(), 1, "{mail:?}");
+    assert_eq!(mail[0].0, "dev@tessera.test");
+    assert_eq!(
+        mail[0].1,
+        format!("[Tessera] Ada Admin mentioned you on {key}")
+    );
+
+    // It shows in Dev's notifications, unread.
+    let (_, notes) = app
+        .request(
+            Method::GET,
+            "/rest/tessera/1.0/notifications",
+            Some(&dev),
+            None,
+        )
+        .await;
+    assert_eq!(notes["unread"], 1);
+    let note = &notes["values"][0];
+    assert_eq!(note["kind"], "mention");
+    assert_eq!(note["link"], format!("/browse/{key}"));
+    assert_eq!(note["actor"]["displayName"], "Ada Admin");
+    assert_eq!(note["read"], false);
+    let id = note["id"].as_str().unwrap();
+    let (status, _) = app
+        .request(
+            Method::POST,
+            &format!("/rest/tessera/1.0/notifications/{id}/read"),
+            Some(&dev),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, notes) = app
+        .request(
+            Method::GET,
+            "/rest/tessera/1.0/notifications",
+            Some(&dev),
+            None,
+        )
+        .await;
+    assert_eq!(notes["unread"], 0);
+    // Nobody else can mark it.
+    let (status, _) = app
+        .request(
+            Method::POST,
+            &format!("/rest/tessera/1.0/notifications/{id}/read"),
+            Some(&ops),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    clear(&app).await;
+
+    // Editing the comment to add Ops mentions only Ops; Dev is not told again.
+    let comment_id = comment["id"].as_str().unwrap();
+    let mut body = mention_doc(&dev_account, "Dev", " and ");
+    body["content"][0]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "type": "mention", "attrs": { "id": ops_account, "text": "@Ops" } }));
+    let (status, _) = app
+        .put(
+            &format!("{API}/issue/{key}/comment/{comment_id}"),
+            json!({ "body": body }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let mail = outbox(&app).await;
+    assert_eq!(mail.len(), 1, "{mail:?}");
+    assert_eq!(mail[0].0, "ops@tessera.test");
+    clear(&app).await;
+
+    // A description mention on a new issue reaches the person mentioned.
+    let created = app
+        .issue(
+            "PROJ",
+            "Disk full",
+            json!({ "description": mention_doc(&ops_account, "Ops", " please check") }),
+        )
+        .await;
+    let mail = outbox(&app).await;
+    assert_eq!(mail.len(), 1, "{mail:?}");
+    assert_eq!(
+        mail[0].1,
+        format!("[Tessera] Ada Admin mentioned you on {created}")
+    );
+
+    // Read-all clears the count.
+    let (_, notes) = app
+        .request(
+            Method::GET,
+            "/rest/tessera/1.0/notifications",
+            Some(&ops),
+            None,
+        )
+        .await;
+    assert_eq!(notes["unread"], 2);
+    app.request(
+        Method::POST,
+        "/rest/tessera/1.0/notifications/read-all",
+        Some(&ops),
+        None,
+    )
+    .await;
+    let (_, notes) = app
+        .request(
+            Method::GET,
+            "/rest/tessera/1.0/notifications",
+            Some(&ops),
+            None,
+        )
+        .await;
+    assert_eq!(notes["unread"], 0);
+}
+
+#[tokio::test]
+async fn page_mentions_reach_people() {
+    let app = TestApp::new().await;
+    app.post(
+        "/wiki/rest/api/space",
+        json!({ "key": "DOCS", "name": "Docs" }),
+    )
+    .await;
+    let (dev, dev_account) = app.user("dev@tessera.test", "Dev").await;
+    clear(&app).await;
+    let storage =
+        format!("<p><ac:link><ri:user ri:account-id=\"{dev_account}\" /></ac:link> owns this.</p>");
+    let (status, page) = app
+        .post(
+            "/wiki/rest/api/content",
+            json!({ "type": "page", "title": "Ownership", "space": { "key": "DOCS" },
+                    "body": { "storage": { "value": storage, "representation": "storage" } } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let mail = outbox(&app).await;
+    assert_eq!(mail.len(), 1, "{mail:?}");
+    assert_eq!(mail[0].0, "dev@tessera.test");
+    assert_eq!(mail[0].1, "[Tessera] Ada Admin mentioned you on Ownership");
+    let (_, notes) = app
+        .request(
+            Method::GET,
+            "/rest/tessera/1.0/notifications",
+            Some(&dev),
+            None,
+        )
+        .await;
+    let id = page["id"].as_str().unwrap();
+    assert_eq!(
+        notes["values"][0]["link"],
+        format!("/wiki/spaces/DOCS/pages/{id}")
+    );
+}

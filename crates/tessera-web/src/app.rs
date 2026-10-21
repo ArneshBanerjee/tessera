@@ -11,7 +11,7 @@ use crate::api;
 use crate::components::{Avatar, ErrorText};
 use crate::model::User;
 use crate::pages::{
-    admin, admin_security, admin_workflows, board, create, dashboards, filters, issue,
+    admin, admin_security, admin_workflows, board, create, dashboards, filters, inbox, issue,
     project_settings, projects, reports, search, settings, wiki, your_work,
 };
 
@@ -205,6 +205,7 @@ fn TopNav() -> impl IntoView {
                     on:input:target=move |ev| query.set(ev.target().value())/>
             </form>
             <div class="nav-user">
+                <inbox::NotificationBell/>
                 <Show when=move || session.admin.get()>
                     <A href="/admin/users" attr:class="nav-link">"Admin"</A>
                 </Show>

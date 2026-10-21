@@ -10,7 +10,8 @@ use super::{AgileFields, agile_fields};
 use crate::api;
 use crate::app::use_session;
 use crate::components::{
-    Avatar, ErrorText, Lozenge, TypeIcon, UserSelect, autofocus, render_adf, users_resource,
+    Avatar, ErrorText, Lozenge, MarkdownArea, TypeIcon, UserSelect, autofocus, render_adf,
+    users_resource,
 };
 use crate::model::{Comment, Issue, IssueRef, LinkType, Named, Transition, User, short_time};
 
@@ -263,9 +264,8 @@ fn Description(key: String, description: Value, error: RwSignal<Option<String>>)
     view! {
         <Show when=move || editing.get()
             fallback=move || view! { <div class="editable" title="Click to edit" on:click=move |_| editing.set(true)>{render_adf(&shown.get_value())}</div> }>
-            <textarea class="input editor" rows="10" node_ref=autofocus() placeholder="Describe the work. Markdown works: **bold**, *italic*, lists, `code`."
-                prop:value=move || draft.get()
-                on:input:target=move |ev| draft.set(ev.target().value())></textarea>
+            <MarkdownArea value=draft rows=10 class="input editor" autofocus=true
+                placeholder="Describe the work. Markdown works: **bold**, *italic*, lists, `code`, and @ to mention someone."/>
             <div class="form-actions">
                 <button class="button primary" on:click=save.clone()>"Save"</button>
                 <button class="button subtle" on:click=move |_| editing.set(false)>"Cancel"</button>
@@ -638,9 +638,7 @@ fn AddComment(key: String) -> impl IntoView {
         <form class="add-comment" on:submit=submit>
             <Avatar user=Some(session.me.get_value()) size=32/>
             <div class="grow">
-                <textarea class="input" rows="3" placeholder="Add a comment…"
-                    prop:value=move || draft.get()
-                    on:input:target=move |ev| draft.set(ev.target().value())></textarea>
+                <MarkdownArea value=draft rows=3 placeholder="Add a comment… Type @ to mention someone."/>
                 <ErrorText error=error/>
                 <button class="button primary" type="submit">"Save"</button>
             </div>
