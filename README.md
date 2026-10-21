@@ -54,7 +54,7 @@ Rich text is stored as ADF. The v3 API returns ADF, and v2 returns plain text.
 
 ### Not yet built
 
-More dashboard gadgets, in-app notifications, a rich-text editor, and import of Atlassian backups.
+Import of Atlassian backups, a desktop app, more dashboard gadgets, and the products that follow: Service Management, Trello-style boards, and Statuspage.
 
 ## Compatibility
 
