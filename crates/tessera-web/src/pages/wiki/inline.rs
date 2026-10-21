@@ -194,8 +194,13 @@ pub fn CommentedBody(page_id: String, kind: String, html: String, current: bool)
             return;
         };
         for i in 0..spans.length() {
-            if let Some(span) = spans.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) {
-                let done = span.get_attribute("data-ref").is_some_and(|r| resolved.contains(&r));
+            if let Some(span) = spans
+                .item(i)
+                .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+            {
+                let done = span
+                    .get_attribute("data-ref")
+                    .is_some_and(|r| resolved.contains(&r));
                 let _ = span.class_list().toggle_with_force("resolved", done);
             }
         }
