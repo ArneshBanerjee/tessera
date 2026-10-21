@@ -10,7 +10,7 @@ pub mod cql;
 pub mod error;
 pub mod render;
 mod restrictions;
-mod search;
+pub mod search;
 pub mod service;
 mod spaces;
 mod templates;

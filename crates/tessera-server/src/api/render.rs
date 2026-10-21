@@ -277,7 +277,7 @@ fn user_date(date: &str) -> String {
 }
 
 /// A file-name-safe version of a name, for icon URLs: "Won't Do" becomes "wont-do".
-fn icon_slug(name: &str) -> String {
+pub fn icon_slug(name: &str) -> String {
     name.to_ascii_lowercase()
         .chars()
         .filter_map(|c| match c {

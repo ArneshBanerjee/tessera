@@ -8,6 +8,7 @@ pub mod bulk;
 pub mod create;
 pub mod dashboards;
 pub mod filters;
+pub mod find;
 pub mod inbox;
 pub mod issue;
 pub mod project_settings;

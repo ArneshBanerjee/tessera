@@ -100,6 +100,34 @@ async fn space_ids(state: &AppState, compiled: &Compiled) -> WikiResult<Vec<i64>
     .await?)
 }
 
+/// Current content matching CQL that the user may see, in order, for Tessera's search across
+/// Jira and Confluence.
+pub async fn find_content(
+    state: &AppState,
+    user: &User,
+    cql_text: &str,
+) -> WikiResult<Vec<Content>> {
+    let compiled = compile(state, user, cql_text, Target::Content).await?;
+    let ids = content_ids(state, user, &compiled).await?;
+    load(state, &ids).await
+}
+
+/// Spaces matching CQL that the user may read, in order.
+pub async fn find_spaces(
+    state: &AppState,
+    user: &User,
+    cql_text: &str,
+) -> WikiResult<Vec<spaces::Space>> {
+    let compiled = compile(state, user, cql_text, Target::Spaces).await?;
+    let mut out = Vec::new();
+    for id in space_ids(state, &compiled).await? {
+        if let Some(space) = spaces::by_id(&state.db, id).await? {
+            out.push(space);
+        }
+    }
+    Ok(out)
+}
+
 async fn load(state: &AppState, ids: &[i64]) -> WikiResult<Vec<Content>> {
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {

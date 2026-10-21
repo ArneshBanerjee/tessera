@@ -497,3 +497,19 @@ textarea.input { resize: vertical; }
 .check-row { flex-direction: row !important; align-items: center; gap: 8px !important; font-weight: 500; }
 .transition-group { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .bulk-change .tabs { flex-wrap: wrap; }
+
+/* Search across products */
+.nav-search { position: relative; }
+.find-menu { right: 0; left: auto; width: min(480px, 92vw); padding: 6px 0; max-height: 70vh; overflow-y: auto; }
+.find-section { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.find-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 4px 12px; }
+.find-row { display: flex; gap: 10px; align-items: center; padding: 6px 12px; color: var(--text); }
+.find-row:hover { background: var(--surface-sunken); text-decoration: none; }
+.find-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.find-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-glyph { width: 16px; text-align: center; }
+.find-when { white-space: nowrap; }
+.find-all { display: block; padding: 8px 12px; font-weight: 500; }
+.find-empty { padding: 8px 12px; margin: 0; }
+.find-block .find-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.search-results-page { max-width: 860px; }

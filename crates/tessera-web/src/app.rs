@@ -3,7 +3,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::{A, ParentRoute, Route, Router, Routes};
-use leptos_router::hooks::use_navigate;
 use leptos_router::path;
 use serde_json::json;
 
@@ -11,7 +10,7 @@ use crate::api;
 use crate::components::{Avatar, ErrorText};
 use crate::model::User;
 use crate::pages::{
-    admin, admin_security, admin_workflows, board, create, dashboards, filters, inbox, issue,
+    admin, admin_security, admin_workflows, board, create, dashboards, filters, find, inbox, issue,
     project_settings, projects, reports, search, settings, wiki, your_work,
 };
 
@@ -123,6 +122,7 @@ fn Shell(me: User) -> impl IntoView {
                 </ParentRoute>
                 <Route path=path!("/browse/:key") view=issue::IssuePage/>
                 <Route path=path!("/issues") view=search::SearchPage/>
+                <Route path=path!("/search") view=find::SearchResults/>
                 <Route path=path!("/filters") view=filters::FiltersPage/>
                 <Route path=path!("/jira/dashboards") view=dashboards::DashboardsPage/>
                 <Route path=path!("/jira/dashboards/:id") view=dashboards::DashboardPage/>
@@ -155,35 +155,6 @@ fn Shell(me: User) -> impl IntoView {
 #[component]
 fn TopNav() -> impl IntoView {
     let session = use_session();
-    let navigate = use_navigate();
-    let query = RwSignal::new(String::new());
-    // Quick search: an issue key opens the issue; anything else searches text.
-    let search = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let text = query.get().trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        let is_key = text.rsplit_once('-').is_some_and(|(project, number)| {
-            !project.is_empty() && number.chars().all(|c| c.is_ascii_digit()) && !number.is_empty()
-        });
-        if is_key {
-            navigate(
-                &format!("/browse/{}", text.to_uppercase()),
-                Default::default(),
-            );
-        } else {
-            let jql = format!(
-                "text ~ \"{}\" ORDER BY updated DESC",
-                text.replace('"', "\\\"")
-            );
-            navigate(
-                &format!("/issues?jql={}", api::encode(&jql)),
-                Default::default(),
-            );
-        }
-        query.set(String::new());
-    };
     let logout = move |_| {
         spawn_local(async move {
             let _ = api::delete("/rest/auth/1/session").await;
@@ -199,11 +170,7 @@ fn TopNav() -> impl IntoView {
             <A href="/filters" attr:class="nav-link">"Filters"</A>
             <A href="/wiki" attr:class="nav-link">"Spaces"</A>
             <button class="button primary" on:click=move |_| session.creating.set(true)>"Create"</button>
-            <form class="nav-search" on:submit=search>
-                <input class="input" type="search" placeholder="Search or go to PROJ-1"
-                    prop:value=move || query.get()
-                    on:input:target=move |ev| query.set(ev.target().value())/>
-            </form>
+            <find::SearchBox/>
             <div class="nav-user">
                 <inbox::NotificationBell/>
                 <Show when=move || session.admin.get()>

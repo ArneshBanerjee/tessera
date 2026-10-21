@@ -100,7 +100,7 @@ async fn find_editable(state: &AppState, user: &User, id: &str) -> ApiResult<Das
 }
 
 /// The dashboards a user may see.
-async fn visible(state: &AppState, user: &User) -> ApiResult<Vec<Dashboard>> {
+pub async fn visible(state: &AppState, user: &User) -> ApiResult<Vec<Dashboard>> {
     let mut out = Vec::new();
     for dashboard in dashboards::all(&state.db).await? {
         if can_view(state, user, &dashboard).await? {

@@ -9,7 +9,8 @@ pub mod agile;
 pub mod attachments;
 mod bulk;
 mod comments;
-mod dashboards;
+pub mod dashboards;
+mod everything;
 pub mod extract;
 mod fields;
 pub mod filters;
@@ -98,6 +99,7 @@ pub fn router() -> Router<AppState> {
                 )
                 .route("/dashboard/{id}/layout", put(dashboards::set_layout))
                 .merge(notifications::router())
+                .route("/search", get(everything::search))
                 .merge(agile::reports::tessera_router())
                 .merge(agile::quick_filters::tessera_router()),
         )
